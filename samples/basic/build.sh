@@ -36,8 +36,11 @@ do
 APP_SRC="$i"
 OUT_FILE=${i%.*}.wasm
 
+REPOROOT=`git rev-parse --show-toplevel`
+CLANG=$REPOROOT/../tools/wasi-sdk/bin/clang
 # use WAMR SDK to build out the .wasm binary
-/opt/wasi-sdk/bin/clang     \
+#/opt/wasi-sdk/bin/clang     \
+$CLANG     \
         --target=wasm32 -O0 -z stack-size=4096 -Wl,--initial-memory=65536 \
         --sysroot=${WAMR_DIR}/wamr-sdk/app/libc-builtin-sysroot  \
         -Wl,--allow-undefined-file=${WAMR_DIR}/wamr-sdk/app/libc-builtin-sysroot/share/defined-symbols.txt \
