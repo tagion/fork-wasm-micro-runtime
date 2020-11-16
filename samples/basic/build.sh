@@ -37,7 +37,8 @@ APP_SRC="$i"
 OUT_FILE=${i%.*}.wasm
 
 REPOROOT=`git rev-parse --show-toplevel`
-CLANG=$REPOROOT/../tools/wasi-sdk/bin/clang
+CLANG=/opt/wasi-sdk/bin/clang
+#$REPOROOT/../tools/wasi-sdk/bin/clang
 # use WAMR SDK to build out the .wasm binary
 #/opt/wasi-sdk/bin/clang     \
 $CLANG     \
