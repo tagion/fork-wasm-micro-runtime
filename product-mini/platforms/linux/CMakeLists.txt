@@ -65,9 +65,19 @@ if (NOT DEFINED WAMR_BUILD_MULTI_MODULE)
   set (WAMR_BUILD_MULTI_MODULE 0)
 endif ()
 
+if (NOT DEFINED WAMR_BUILD_LIB_PTHREAD)
+  # Disable pthread library by default
+  set (WAMR_BUILD_LIB_PTHREAD 0)
+endif ()
+
 if (NOT DEFINED WAMR_BUILD_MINI_LOADER)
   # Disable wasm mini loader by default
   set (WAMR_BUILD_MINI_LOADER 0)
+endif ()
+
+if (NOT DEFINED WAMR_BUILD_SIMD)
+  # Disable SIMD by default
+  set (WAMR_BUILD_SIMD 0)
 endif ()
 
 if (COLLECT_CODE_COVERAGE EQUAL 1)

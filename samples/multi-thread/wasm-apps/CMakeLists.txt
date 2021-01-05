@@ -6,7 +6,11 @@ project(wasm-apps)
 
 set(WAMR_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 
-set(CMAKE_SYSTEM_NAME Linux)
+if (APPLE)
+    set (HAVE_FLAG_SEARCH_PATHS_FIRST 0)
+    set (CMAKE_C_LINK_FLAGS "")
+    set (CMAKE_CXX_LINK_FLAGS "")
+endif ()
 set(CMAKE_SYSTEM_PROCESSOR wasm32)
 set (CMAKE_SYSROOT                  ${WAMR_ROOT_DIR}/wamr-sdk/app/libc-builtin-sysroot)
 
@@ -23,11 +27,13 @@ set (DEFINED_SYMBOLS
 "${WAMR_ROOT_DIR}/wamr-sdk/app/libc-builtin-sysroot/share/defined-symbols.txt")
 
 set (CMAKE_EXE_LINKER_FLAGS
-    "-Wl,--shared-memory,--max-memory=131072,       \
-    -Wl,--no-entry,--strip-all,--export=main,       \
-    -Wl,--export=__heap_base,--export=__data_end    \
-    -Wl,--export=__wasm_call_ctors  \
-    -Wl,--allow-undefined-file=${DEFINED_SYMBOLS}"
+     "-Wl,--shared-memory,--max-memory=131072,          \
+      -Wl,--no-entry,--strip-all,                       \
+      -Wl,--export=__heap_base,--export=__data_end      \
+      -Wl,--export=__wasm_call_ctors                    \
+      -Wl,--export=main -Wl,--export=__main_argc_argv   \
+      -Wl,--allow-undefined"
+      #-Wl,--allow-undefined-file=${DEFINED_SYMBOLS}"
 )
 
 add_executable(test.wasm  main.c)

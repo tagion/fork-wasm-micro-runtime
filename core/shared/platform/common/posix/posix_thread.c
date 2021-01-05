@@ -112,38 +112,24 @@ int os_mutex_destroy(korp_mutex *mutex)
     return ret == 0 ? BHT_OK : BHT_ERROR;
 }
 
-/* Returned error (EINVAL, EAGAIN and EDEADLK) from
- locking the mutex indicates some logic error present in
- the program somewhere.
- Don't try to recover error for an existing unknown error.*/
 int os_mutex_lock(korp_mutex *mutex)
 {
     int ret;
 
     assert(mutex);
     ret = pthread_mutex_lock(mutex);
-    if (0 != ret) {
-        os_printf("vm mutex lock failed (ret=%d)!\n", ret);
-        exit(-1);
-    }
-    return ret;
+
+    return ret == 0 ? BHT_OK : BHT_ERROR;
 }
 
-/* Returned error (EINVAL, EAGAIN and EPERM) from
- unlocking the mutex indicates some logic error present
- in the program somewhere.
- Don't try to recover error for an existing unknown error.*/
 int os_mutex_unlock(korp_mutex *mutex)
 {
     int ret;
 
     assert(mutex);
     ret = pthread_mutex_unlock(mutex);
-    if (0 != ret) {
-        os_printf("vm mutex unlock failed (ret=%d)!\n", ret);
-        exit(-1);
-    }
-    return ret;
+
+    return ret == 0 ? BHT_OK : BHT_ERROR;
 }
 
 int os_cond_init(korp_cond *cond)
@@ -177,27 +163,48 @@ int os_cond_wait(korp_cond *cond, korp_mutex *mutex)
     return BHT_OK;
 }
 
-static void msec_nsec_to_abstime(struct timespec *ts, int usec)
+static void msec_nsec_to_abstime(struct timespec *ts, uint64 usec)
 {
     struct timeval tv;
+    long int tv_sec_new, tv_nsec_new;
 
     gettimeofday(&tv, NULL);
 
-    ts->tv_sec = (long int)(tv.tv_sec + usec / 1000000);
-    ts->tv_nsec = (long int)(tv.tv_usec * 1000 + (usec % 1000000) * 1000);
+    tv_sec_new = (long int)(tv.tv_sec + usec / 1000000);
+    if (tv_sec_new >= tv.tv_sec) {
+        ts->tv_sec = tv_sec_new;
+    }
+    else {
+        /* integer overflow */
+        ts->tv_sec = LONG_MAX;
+        os_printf("Warning: os_cond_reltimedwait exceeds limit, "
+                  "set to max timeout instead\n");
+    }
 
-    if (ts->tv_nsec >= 1000000000L) {
+    tv_nsec_new = (long int)(tv.tv_usec * 1000 + (usec % 1000000) * 1000);
+    if (tv.tv_usec * 1000 >= tv.tv_usec
+        && tv_nsec_new >= tv.tv_usec * 1000) {
+        ts->tv_nsec = tv_nsec_new;
+    }
+    else {
+        /* integer overflow */
+        ts->tv_nsec = LONG_MAX;
+        os_printf("Warning: os_cond_reltimedwait exceeds limit, "
+                  "set to max timeout instead\n");
+    }
+
+    if (ts->tv_nsec >= 1000000000L && ts->tv_sec < LONG_MAX) {
         ts->tv_sec++;
         ts->tv_nsec -= 1000000000L;
     }
 }
 
-int os_cond_reltimedwait(korp_cond *cond, korp_mutex *mutex, int useconds)
+int os_cond_reltimedwait(korp_cond *cond, korp_mutex *mutex, uint64 useconds)
 {
     int ret;
     struct timespec abstime;
 
-    if (useconds == (int)BHT_WAIT_FOREVER)
+    if (useconds == BHT_WAIT_FOREVER)
         ret = pthread_cond_wait(cond, mutex);
     else {
         msec_nsec_to_abstime(&abstime, useconds);
@@ -238,16 +245,27 @@ void os_thread_exit(void *retval)
 uint8 *os_thread_get_stack_boundary()
 {
     pthread_t self = pthread_self();
+#ifdef __linux__
     pthread_attr_t attr;
+    size_t guard_size;
+#endif
     uint8 *addr = NULL;
-    size_t stack_size, guard_size;
+    size_t stack_size;
     int page_size = getpagesize();
+    size_t max_stack_size = (size_t)
+                            (APP_THREAD_STACK_SIZE_MAX + page_size - 1)
+                            & ~(page_size - 1);
+
+    if (max_stack_size < APP_THREAD_STACK_SIZE_DEFAULT)
+        max_stack_size = APP_THREAD_STACK_SIZE_DEFAULT;
 
 #ifdef __linux__
     if (pthread_getattr_np(self, &attr) == 0) {
         pthread_attr_getstack(&attr, (void**)&addr, &stack_size);
         pthread_attr_getguardsize(&attr, &guard_size);
         pthread_attr_destroy(&attr);
+        if (stack_size > max_stack_size)
+            addr = addr + stack_size - max_stack_size;
         if (guard_size < (size_t)page_size)
             /* Reserved 1 guard page at least for safety */
             guard_size = (size_t)page_size;
@@ -257,7 +275,10 @@ uint8 *os_thread_get_stack_boundary()
 #elif defined(__APPLE__)
     if ((addr = (uint8*)pthread_get_stackaddr_np(self))) {
         stack_size = pthread_get_stacksize_np(self);
-        addr -= stack_size;
+        if (stack_size > max_stack_size)
+            addr -= max_stack_size;
+        else
+            addr -= stack_size;
         /* Reserved 1 guard page at least for safety */
         addr += page_size;
     }
@@ -290,7 +311,6 @@ mask_signals(int how)
 __attribute__((noreturn)) static void
 signal_callback(int sig_num, siginfo_t *sig_info, void *sig_ucontext)
 {
-    int i;
     void *sig_addr = sig_info->si_addr;
 
     mask_signals(SIG_BLOCK);
@@ -314,12 +334,7 @@ signal_callback(int sig_num, siginfo_t *sig_info, void *sig_ucontext)
             break;
     }
 
-    /* divived by 0 to make it abort */
-    i = os_printf(" ");
-    os_printf("%d\n", i / (i - 1));
-    /* access NULL ptr to make it abort */
-    os_printf("%d\n", *(uint32*)(uintptr_t)(i - 1));
-    exit(1);
+    abort();
 }
 
 int

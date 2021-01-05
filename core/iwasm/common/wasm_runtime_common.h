@@ -43,15 +43,44 @@ typedef struct WASMModuleInstanceCommon {
     uint8 module_inst_data[1];
 } WASMModuleInstanceCommon;
 
+typedef struct WASMModuleMemConsumption {
+    uint32 total_size;
+    uint32 module_struct_size;
+    uint32 types_size;
+    uint32 imports_size;
+    uint32 functions_size;
+    uint32 tables_size;
+    uint32 memories_size;
+    uint32 globals_size;
+    uint32 exports_size;
+    uint32 table_segs_size;
+    uint32 data_segs_size;
+    uint32 const_strs_size;
+#if WASM_ENABLE_AOT != 0
+    uint32 aot_code_size;
+#endif
+} WASMModuleMemConsumption;
+
+typedef struct WASMModuleInstMemConsumption {
+    uint32 total_size;
+    uint32 module_inst_struct_size;
+    uint32 memories_size;
+    uint32 app_heap_size;
+    uint32 tables_size;
+    uint32 globals_size;
+    uint32 functions_size;
+    uint32 exports_size;
+} WASMModuleInstMemConsumption;
+
 #if WASM_ENABLE_LIBC_WASI != 0
 typedef struct WASIContext {
-    /* Use offset but not native address, since these fields are
-       allocated from app's heap, and the heap space may be re-allocated
-       after memory.grow opcode is executed, the original native address
-       cannot be accessed again. */
-    int32 curfds_offset;
-    int32 prestats_offset;
-    int32 argv_environ_offset;
+    struct fd_table *curfds;
+    struct fd_prestats *prestats;
+    struct argv_environ_values *argv_environ;
+    char *argv_buf;
+    char **argv_list;
+    char *env_buf;
+    char **env_list;
 } WASIContext;
 #endif
 
@@ -67,16 +96,17 @@ typedef struct WASMRegisteredModule {
 } WASMRegisteredModule;
 #endif
 
+typedef struct WASMMemoryInstanceCommon {
+    uint32 module_type;
+    uint8 memory_inst_data[1];
+} WASMMemoryInstanceCommon;
+
 typedef package_type_t PackageType;
 typedef wasm_section_t WASMSection, AOTSection;
 
-void
-set_error_buf_v(char *error_buf, uint32 error_buf_size, const char *format,
-                ...);
-
 /* See wasm_export.h for description */
 bool
-wasm_runtime_init();
+wasm_runtime_init(void);
 
 /* See wasm_export.h for description */
 bool
@@ -84,7 +114,7 @@ wasm_runtime_full_init(RuntimeInitArgs *init_args);
 
 /* See wasm_export.h for description */
 void
-wasm_runtime_destroy();
+wasm_runtime_destroy(void);
 
 /* See wasm_export.h for description */
 PackageType
@@ -162,6 +192,18 @@ wasm_runtime_call_wasm(WASMExecEnv *exec_env,
                        WASMFunctionInstanceCommon *function,
                        uint32 argc, uint32 argv[]);
 
+bool
+wasm_runtime_call_wasm_a(WASMExecEnv *exec_env,
+                         WASMFunctionInstanceCommon *function,
+                         uint32 num_results, wasm_val_t *results,
+                         uint32 num_args, wasm_val_t *args);
+
+bool
+wasm_runtime_call_wasm_v(WASMExecEnv *exec_env,
+                         WASMFunctionInstanceCommon *function,
+                         uint32 num_results, wasm_val_t *results,
+                         uint32 num_args, ...);
+
 /**
  * Call a function reference of a given WASM runtime instance with
  * arguments.
@@ -222,28 +264,28 @@ void *
 wasm_runtime_get_custom_data(WASMModuleInstanceCommon *module_inst);
 
 /* See wasm_export.h for description */
-int32
+uint32
 wasm_runtime_module_malloc(WASMModuleInstanceCommon *module_inst, uint32 size,
                            void **p_native_addr);
 
 /* See wasm_export.h for description */
 void
-wasm_runtime_module_free(WASMModuleInstanceCommon *module_inst, int32 ptr);
+wasm_runtime_module_free(WASMModuleInstanceCommon *module_inst, uint32 ptr);
 
 /* See wasm_export.h for description */
-int32
+uint32
 wasm_runtime_module_dup_data(WASMModuleInstanceCommon *module_inst,
                              const char *src, uint32 size);
 
 /* See wasm_export.h for description */
 bool
 wasm_runtime_validate_app_addr(WASMModuleInstanceCommon *module_inst,
-                               int32 app_offset, uint32 size);
+                               uint32 app_offset, uint32 size);
 
 /* See wasm_export.h for description */
 bool
 wasm_runtime_validate_app_str_addr(WASMModuleInstanceCommon *module_inst,
-                                   int32 app_str_offset);
+                                   uint32 app_str_offset);
 
 /* See wasm_export.h for description */
 bool
@@ -253,19 +295,19 @@ wasm_runtime_validate_native_addr(WASMModuleInstanceCommon *module_inst,
 /* See wasm_export.h for description */
 void *
 wasm_runtime_addr_app_to_native(WASMModuleInstanceCommon *module_inst,
-                                int32 app_offset);
+                                uint32 app_offset);
 
 /* See wasm_export.h for description */
-int32
+uint32
 wasm_runtime_addr_native_to_app(WASMModuleInstanceCommon *module_inst,
                                 void *native_ptr);
 
 /* See wasm_export.h for description */
 bool
 wasm_runtime_get_app_addr_range(WASMModuleInstanceCommon *module_inst,
-                                int32 app_offset,
-                                int32 *p_app_start_offset,
-                                int32 *p_app_end_offset);
+                                uint32 app_offset,
+                                uint32 *p_app_start_offset,
+                                uint32 *p_app_end_offset);
 
 /* See wasm_export.h for description */
 bool
@@ -326,6 +368,9 @@ wasm_runtime_is_loading_module(const char *module_name);
 void
 wasm_runtime_destroy_loading_module_list();
 #endif /* WASM_ENALBE_MULTI_MODULE */
+
+bool
+wasm_runtime_is_host_module(const char *module_name);
 
 bool
 wasm_runtime_is_built_in_module(const char *module_name);
@@ -414,6 +459,19 @@ wasm_runtime_invoke_native_raw(WASMExecEnv *exec_env, void *func_ptr,
                                const WASMType *func_type, const char *signature,
                                void *attachment,
                                uint32 *argv, uint32 argc, uint32 *ret);
+
+void
+wasm_runtime_read_v128(const uint8 *bytes, uint64 *ret1, uint64 *ret2);
+
+void
+wasm_runtime_dump_module_mem_consumption(const WASMModuleCommon *module);
+
+void
+wasm_runtime_dump_module_inst_mem_consumption(const WASMModuleInstanceCommon
+                                              *module_inst);
+
+void
+wasm_runtime_dump_exec_env_mem_consumption(const WASMExecEnv *exec_env);
 
 #ifdef __cplusplus
 }

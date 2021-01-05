@@ -43,6 +43,10 @@ wasm_exec_env_create_internal(struct WASMModuleInstanceCommon *module_inst,
     exec_env->wasm_stack.s.top_boundary =
         exec_env->wasm_stack.s.bottom + stack_size;
     exec_env->wasm_stack.s.top = exec_env->wasm_stack.s.bottom;
+
+#if WASM_ENABLE_MEMORY_TRACING != 0
+    wasm_runtime_dump_exec_env_mem_consumption(exec_env);
+#endif
     return exec_env;
 
 #if WASM_ENABLE_THREAD_MGR != 0
@@ -84,15 +88,16 @@ WASMExecEnv *
 wasm_exec_env_create(struct WASMModuleInstanceCommon *module_inst,
                      uint32 stack_size)
 {
-    WASMExecEnv *exec_env = wasm_exec_env_create_internal(module_inst,
-                                                          stack_size);
+    WASMExecEnv *exec_env =
+        wasm_exec_env_create_internal(module_inst, stack_size);
+
+    if (!exec_env)
+        return NULL;
+
     /* Set the aux_stack_boundary to 0 */
     exec_env->aux_stack_boundary = 0;
 #if WASM_ENABLE_THREAD_MGR != 0
     WASMCluster *cluster;
-
-    if (!exec_env)
-        return NULL;
 
     /* Create a new cluster for this exec_env */
     cluster = wasm_cluster_create(exec_env);

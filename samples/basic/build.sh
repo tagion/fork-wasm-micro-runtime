@@ -1,3 +1,8 @@
+#
+# Copyright (C) 2019 Intel Corporation.  All rights reserved.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#
+
 #!/bin/bash
 
 CURR_DIR=$PWD
@@ -36,16 +41,12 @@ do
 APP_SRC="$i"
 OUT_FILE=${i%.*}.wasm
 
-REPOROOT=`git rev-parse --show-toplevel`
-CLANG=/opt/wasi-sdk/bin/clang
-#$REPOROOT/../tools/wasi-sdk/bin/clang
 # use WAMR SDK to build out the .wasm binary
-#/opt/wasi-sdk/bin/clang     \
-$CLANG     \
+/opt/wasi-sdk/bin/clang     \
         --target=wasm32 -O0 -z stack-size=4096 -Wl,--initial-memory=65536 \
         --sysroot=${WAMR_DIR}/wamr-sdk/app/libc-builtin-sysroot  \
         -Wl,--allow-undefined-file=${WAMR_DIR}/wamr-sdk/app/libc-builtin-sysroot/share/defined-symbols.txt \
-        -Wl,--no-threads,--strip-all,--no-entry -nostdlib \
+        -Wl,--strip-all,--no-entry -nostdlib \
         -Wl,--export=generate_float \
         -Wl,--export=float_to_string \
         -Wl,--export=calculate\

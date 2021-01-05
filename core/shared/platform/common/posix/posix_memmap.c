@@ -14,7 +14,7 @@ os_mmap(void *hint, size_t size, int prot, int flags)
     uint8 *addr;
     uint32 i;
 
-    page_size = getpagesize();
+    page_size = (uint64)getpagesize();
     request_size = (size + page_size - 1) & ~(page_size - 1);
 
     if ((size_t)request_size < size)
@@ -60,12 +60,12 @@ os_mmap(void *hint, size_t size, int prot, int flags)
 void
 os_munmap(void *addr, size_t size)
 {
-    uint64 page_size = getpagesize();
+    uint64 page_size = (uint64)getpagesize();
     uint64 request_size = (size + page_size - 1) & ~(page_size - 1);
 
     if (addr) {
         if (munmap(addr, request_size)) {
-            os_printf("os_munmap error addr:%p, size:0x%lx, errno:%d\n",
+            os_printf("os_munmap error addr:%p, size:0x%"PRIx64", errno:%d\n",
                       addr, request_size, errno);
         }
     }
@@ -75,7 +75,7 @@ int
 os_mprotect(void *addr, size_t size, int prot)
 {
     int map_prot = PROT_NONE;
-    uint64 page_size = getpagesize();
+    uint64 page_size = (uint64)getpagesize();
     uint64 request_size = (size + page_size - 1) & ~(page_size - 1);
 
     if (!addr)

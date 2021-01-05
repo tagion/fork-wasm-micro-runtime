@@ -25,24 +25,8 @@ create_func_return_block(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx)
 
         /* Create return IR */
         LLVMPositionBuilderAtEnd(comp_ctx->builder, func_ctx->func_return_block);
-        if (aot_func_type->result_count) {
-            switch (aot_func_type->types[aot_func_type->param_count]) {
-                case VALUE_TYPE_I32:
-                    LLVMBuildRet(comp_ctx->builder, I32_ZERO);
-                    break;
-                case VALUE_TYPE_I64:
-                    LLVMBuildRet(comp_ctx->builder, I64_ZERO);
-                    break;
-                case VALUE_TYPE_F32:
-                    LLVMBuildRet(comp_ctx->builder, F32_ZERO);
-                    break;
-                case VALUE_TYPE_F64:
-                    LLVMBuildRet(comp_ctx->builder, F64_ZERO);
-                    break;
-            }
-        }
-        else {
-            LLVMBuildRetVoid(comp_ctx->builder);
+        if (!aot_build_zero_function_ret(comp_ctx, aot_func_type)) {
+            return false;
         }
     }
 
@@ -115,7 +99,7 @@ check_call_return(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     /* Add check exection success block */
     if (!(check_call_succ = LLVMAppendBasicBlockInContext(comp_ctx->context,
                                                           func_ctx->func,
-                                                          "check_exce_succ"))) {
+                                                          "check_call_succ"))) {
         aot_set_last_error("llvm add basic block failed.");
         return false;
     }
@@ -304,7 +288,7 @@ check_stack_boundary(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
 
 bool
 aot_compile_op_call(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
-                    uint32 func_idx, uint8 **p_frame_ip)
+                    uint32 func_idx, bool tail_call)
 {
     uint32 import_func_count = comp_ctx->comp_data->import_func_count;
     AOTImportFunc *import_funcs = comp_ctx->comp_data->import_funcs;
@@ -325,6 +309,14 @@ aot_compile_op_call(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     uint8 *ext_ret_types = NULL;
     bool ret = false;
     char buf[32];
+
+#if WASM_ENABLE_THREAD_MGR != 0
+    /* Insert suspend check point */
+    if (comp_ctx->enable_thread_mgr) {
+        if (!check_suspend_flags(comp_ctx, func_ctx))
+            return false;
+    }
+#endif
 
     /* Check function index */
     if (func_idx >= import_func_count + func_count) {
@@ -365,6 +357,46 @@ aot_compile_op_call(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     /* Pop parameters from stack */
     for (i = param_count - 1; i >= 0; i--)
         POP(param_values[i + j], func_type->types[i]);
+
+    /* Set parameters for multiple return values, the first return value
+       is returned by function return value, and the other return values
+       are returned by function parameters with pointer types */
+    if (ext_ret_count > 0) {
+        ext_ret_types = func_type->types + param_count + 1;
+        ext_ret_cell_num = wasm_get_cell_num(ext_ret_types, ext_ret_count);
+        if (ext_ret_cell_num > 64) {
+            aot_set_last_error("prepare extra results's return "
+                               "address arguments failed: "
+                               "maximum 64 parameter cell number supported.");
+            goto fail;
+        }
+
+        for (i = 0; i < ext_ret_count; i++) {
+            if (!(ext_ret_idx = I32_CONST(cell_num))
+                || !(ext_ret_ptr_type =
+                        LLVMPointerType(TO_LLVM_TYPE(ext_ret_types[i]), 0))) {
+                aot_set_last_error("llvm add const or pointer type failed.");
+                goto fail;
+            }
+
+            snprintf(buf, sizeof(buf), "ext_ret%d_ptr", i);
+            if (!(ext_ret_ptr = LLVMBuildInBoundsGEP(comp_ctx->builder,
+                                                     func_ctx->argv_buf,
+                                                     &ext_ret_idx, 1, buf))) {
+                aot_set_last_error("llvm build GEP failed.");
+                goto fail;
+            }
+            snprintf(buf, sizeof(buf), "ext_ret%d_ptr_cast", i);
+            if (!(ext_ret_ptr = LLVMBuildBitCast(comp_ctx->builder,
+                                                 ext_ret_ptr, ext_ret_ptr_type,
+                                                 buf))) {
+                aot_set_last_error("llvm build bit cast failed.");
+                goto fail;
+            }
+            param_values[param_count + 1 + i] = ext_ret_ptr;
+            cell_num += wasm_value_type_cell_num(ext_ret_types[i]);
+        }
+    }
 
     if (func_idx < import_func_count) {
         if (!(import_func_idx = I32_CONST(func_idx))) {
@@ -415,46 +447,6 @@ aot_compile_op_call(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
             && !check_stack_boundary(comp_ctx, func_ctx, callee_cell_num))
             goto fail;
 
-        /* Prepare parameters for extra results */
-        if (ext_ret_count > 0) {
-            ext_ret_types = func_type->types + param_count + 1;
-            ext_ret_cell_num =
-                wasm_get_cell_num(ext_ret_types, ext_ret_count);
-            if (ext_ret_cell_num > 64) {
-                aot_set_last_error("prepare extra results's return "
-                                   "address arguments failed: "
-                                   "maximum 64 parameter cell number supported.");
-                goto fail;
-            }
-
-            for (i = 0; i < ext_ret_count; i++) {
-                if (!(ext_ret_idx = I32_CONST(cell_num))
-                    || !(ext_ret_ptr_type =
-                             LLVMPointerType(TO_LLVM_TYPE(ext_ret_types[i]), 0))) {
-                    aot_set_last_error("llvm add const or pointer type failed.");
-                    goto fail;
-                }
-
-                snprintf(buf, sizeof(buf), "func%d_ext_ret%d_ptr", func_idx, i);
-                if (!(ext_ret_ptr = LLVMBuildInBoundsGEP(comp_ctx->builder,
-                                                         func_ctx->argv_buf,
-                                                         &ext_ret_idx, 1, buf))) {
-                    aot_set_last_error("llvm build GEP failed.");
-                    goto fail;
-                }
-                snprintf(buf, sizeof(buf), "func%d_ext_ret%d_ptr_cast", func_idx, i);
-                if (!(ext_ret_ptr = LLVMBuildBitCast(comp_ctx->builder,
-                                                        ext_ret_ptr,
-                                                        ext_ret_ptr_type,
-                                                        buf))) {
-                    aot_set_last_error("llvm build bit cast failed.");
-                    goto fail;
-                }
-                param_values[1 + param_count + i] = ext_ret_ptr;
-                cell_num += wasm_value_type_cell_num(ext_ret_types[i]);
-            }
-        }
-
         /* Call the function */
         if (!(value_ret = LLVMBuildCall(comp_ctx->builder, func,
                                         param_values,
@@ -468,8 +460,12 @@ aot_compile_op_call(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
         /* Set calling convention for the call with the func's calling convention */
         LLVMSetInstructionCallConv(value_ret, LLVMGetFunctionCallConv(func));
 
+        if (tail_call)
+            LLVMSetTailCall(value_ret, true);
+
         /* Check whether there was exception thrown when executing the function */
-        if (!check_exception_thrown(comp_ctx, func_ctx))
+        if (!tail_call
+            && !check_exception_thrown(comp_ctx, func_ctx))
             goto fail;
     }
 
@@ -513,6 +509,14 @@ call_aot_call_indirect_func(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     LLVMValueRef func_param_values[6], res = NULL;
     char buf[32], *func_name = "aot_call_indirect";
     uint32 i, cell_num = 0, ret_cell_num, argv_cell_num;
+
+#if WASM_ENABLE_THREAD_MGR != 0
+    /* Insert suspend check point */
+    if (comp_ctx->enable_thread_mgr) {
+        if (!check_suspend_flags(comp_ctx, func_ctx))
+            return false;
+    }
+#endif
 
     /* prepare function type of aot_call_indirect */
     func_param_types[0] = comp_ctx->exec_env_type;  /* exec_env */
@@ -645,7 +649,7 @@ aot_compile_op_call_indirect(AOTCompContext *comp_ctx, AOTFuncContext *func_ctx,
     uint32 param_cell_num;
     uint64 total_size;
     uint8 *wasm_ret_types = NULL;
-    bool ret;
+    bool ret = false;
 
     /* Check function type index */
     if (type_idx >= comp_ctx->comp_data->func_type_count) {

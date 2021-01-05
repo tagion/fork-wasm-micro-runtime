@@ -265,6 +265,10 @@ call_key_destructor(wasm_exec_env_t exec_env)
     WASMCluster *cluster = wasm_exec_env_get_cluster(exec_env);
     ClusterInfoNode *info = get_cluster_info(cluster);
 
+    if (!info) {
+        return;
+    }
+
     value_node = bh_list_first_elem(info->thread_list);
     while (value_node) {
         if (value_node->exec_env == exec_env)
@@ -435,6 +439,11 @@ get_thread_info(wasm_exec_env_t exec_env, uint32 handle)
 {
     WASMCluster *cluster = wasm_exec_env_get_cluster(exec_env);
     ClusterInfoNode *info = get_cluster_info(cluster);
+
+    if (!info) {
+        return NULL;
+    }
+
     return bh_hash_map_find(info->thread_info_map, (void *)(uintptr_t)handle);
 }
 
@@ -489,7 +498,8 @@ pthread_start_routine(void *arg)
     if(!wasm_runtime_call_indirect(exec_env,
                                    routine_args->elem_index,
                                    1, argv)) {
-        wasm_cluster_spread_exception(exec_env);
+        if (wasm_runtime_get_exception(module_inst))
+            wasm_cluster_spread_exception(exec_env);
     }
 
     /* destroy pthread key values */
@@ -522,6 +532,8 @@ pthread_create_wrapper(wasm_exec_env_t exec_env,
     wasm_module_inst_t module_inst = get_module_inst(exec_env);
     WASIContext *wasi_ctx = get_wasi_ctx(module_inst);
 #endif
+
+    bh_assert(module);
 
     if (!(new_module_inst =
             wasm_runtime_instantiate_internal(module, true, 8192, 0,
@@ -672,6 +684,15 @@ pthread_exit_wrapper(wasm_exec_env_t exec_env, int32 retval_offset)
     /* Currently exit main thread is not allowed */
     if (!args)
         return;
+
+#ifdef OS_ENABLE_HW_BOUND_CHECK
+    /* If hardware bound check enabled, don't deinstantiate module inst
+        and thread info node here for AoT module, as they will be freed
+        in pthread_start_routine */
+    if (exec_env->jmpbuf_stack_top) {
+        wasm_cluster_exit_thread(exec_env, (void *)(uintptr_t)retval_offset);
+    }
+#endif
 
     /* destroy pthread key values */
     call_key_destructor(exec_env);
@@ -827,7 +848,7 @@ pthread_cond_wait_wrapper(wasm_exec_env_t exec_env, uint32 *cond, uint32 *mutex)
 */
 static int32
 pthread_cond_timedwait_wrapper(wasm_exec_env_t exec_env, uint32 *cond,
-                               uint32 *mutex, uint32 useconds)
+                               uint32 *mutex, uint64 useconds)
 {
     ThreadInfoNode *cond_info_node, *mutex_info_node;
 
@@ -993,7 +1014,7 @@ static NativeSymbol native_symbols_lib_pthread[] = {
     REG_NATIVE_FUNC(pthread_mutex_destroy,  "(*)i"),
     REG_NATIVE_FUNC(pthread_cond_init,      "(**)i"),
     REG_NATIVE_FUNC(pthread_cond_wait,      "(**)i"),
-    REG_NATIVE_FUNC(pthread_cond_timedwait, "(**i)i"),
+    REG_NATIVE_FUNC(pthread_cond_timedwait, "(**I)i"),
     REG_NATIVE_FUNC(pthread_cond_signal,    "(*)i"),
     REG_NATIVE_FUNC(pthread_cond_destroy,   "(*)i"),
     REG_NATIVE_FUNC(pthread_key_create,     "(*i)i"),

@@ -19,6 +19,7 @@ extern "C" {
 #define VALUE_TYPE_I64 0X7E
 #define VALUE_TYPE_F32 0x7D
 #define VALUE_TYPE_F64 0x7C
+#define VALUE_TYPE_V128 0x7B
 #define VALUE_TYPE_VOID 0x40
 /* Used by AOT */
 #define VALUE_TYPE_I1  0x41
@@ -34,6 +35,7 @@ extern "C" {
 #define INIT_EXPR_TYPE_I64_CONST 0x42
 #define INIT_EXPR_TYPE_F32_CONST 0x43
 #define INIT_EXPR_TYPE_F64_CONST 0x44
+#define INIT_EXPR_TYPE_V128_CONST 0xFD
 #define INIT_EXPR_TYPE_GET_GLOBAL 0x23
 #define INIT_EXPR_TYPE_ERROR 0xff
 
@@ -56,6 +58,10 @@ extern "C" {
 #define SECTION_TYPE_DATACOUNT 12
 #endif
 
+#define SUB_SECTION_TYPE_MODULE 0
+#define SUB_SECTION_TYPE_FUNC   1
+#define SUB_SECTION_TYPE_LOCAL  2
+
 #define IMPORT_KIND_FUNC 0
 #define IMPORT_KIND_TABLE 1
 #define IMPORT_KIND_MEMORY 2
@@ -75,6 +81,15 @@ typedef struct WASMModule WASMModule;
 typedef struct WASMFunction WASMFunction;
 typedef struct WASMGlobal WASMGlobal;
 
+typedef union V128 {
+    int8 i8x16[16];
+    int16 i16x8[8];
+    int32 i32x8[4];
+    int64 i64x2[2];
+    float32 f32x4[4];
+    float64 f64x2[2];
+} V128;
+
 typedef union WASMValue {
     int32 i32;
     uint32 u32;
@@ -83,6 +98,7 @@ typedef union WASMValue {
     float32 f32;
     float64 f64;
     uintptr_t addr;
+    V128 v128;
 } WASMValue;
 
 typedef struct InitializerExpression {
@@ -94,6 +110,7 @@ typedef struct InitializerExpression {
         float32 f32;
         float64 f64;
         uint32 global_index;
+        V128 v128;
     } u;
 } InitializerExpression;
 
@@ -173,9 +190,10 @@ typedef struct WASMGlobalImport {
     bool is_mutable;
     /* global data after linked */
     WASMValue global_data_linked;
+    bool is_linked;
 #if WASM_ENABLE_MULTI_MODULE != 0
     /* imported function pointer after linked */
-    // TODO: remove if not necessary
+    /* TODO: remove if not needed */
     WASMModule *import_module;
     WASMGlobal *import_global_linked;
 #endif
@@ -195,7 +213,10 @@ typedef struct WASMImport {
     } u;
 } WASMImport;
 
-typedef struct WASMFunction {
+struct WASMFunction {
+#if WASM_ENABLE_CUSTOM_NAME_SECTION != 0
+    char *field_name;
+#endif
     /* the type of function */
     WASMType *func_type;
     uint32 local_count;
@@ -226,13 +247,13 @@ typedef struct WASMFunction {
     uint8 *consts;
     uint32 const_cell_num;
 #endif
-} WASMFunction;
+};
 
-typedef struct WASMGlobal {
+struct WASMGlobal {
     uint8 type;
     bool is_mutable;
     InitializerExpression init_expr;
-} WASMGlobal;
+};
 
 typedef struct WASMExport {
     char *name;
@@ -281,7 +302,7 @@ typedef struct StringNode {
     char *str;
 } StringNode, *StringList;
 
-typedef struct WASMModule {
+struct WASMModule {
     /* Module type, for module loaded from WASM bytecode binary,
        this field is Wasm_Module_Bytecode;
        for module loaded from AOT file, this field is
@@ -325,15 +346,34 @@ typedef struct WASMModule {
     WASMDataSeg **data_segments;
     uint32 start_function;
 
-    /* __data_end global exported by llvm */
-    uint32 llvm_aux_data_end;
-    /* auxiliary stack bottom, or __heap_base global exported by llvm */
-    uint32 llvm_aux_stack_bottom;
-    /* auxiliary stack size */
-    uint32 llvm_aux_stack_size;
-    /* the index of a global exported by llvm, which is
-       auxiliary stack top pointer */
-    uint32 llvm_aux_stack_global_index;
+    /* the index of auxiliary __data_end global,
+       -1 means unexported */
+    uint32 aux_data_end_global_index;
+    /* auxiliary __data_end exported by wasm app */
+    uint32 aux_data_end;
+
+    /* the index of auxiliary __heap_base global,
+       -1 means unexported */
+    uint32 aux_heap_base_global_index;
+    /* auxiliary __heap_base exported by wasm app */
+    uint32 aux_heap_base;
+
+    /* the index of auxiliary stack top global,
+       -1 means unexported */
+    uint32 aux_stack_top_global_index;
+    /* auxiliary stack bottom resolved */
+    uint32 aux_stack_bottom;
+    /* auxiliary stack size resolved */
+    uint32 aux_stack_size;
+
+    /* the index of malloc/free function,
+       -1 means unexported */
+    uint32 malloc_function;
+    uint32 free_function;
+
+    /* the index of __retain function,
+       -1 means unexported */
+    uint32 retain_function;
 
     /* Whether there is possible memory grow, e.g. memory.grow opcode */
     bool possible_memory_grow;
@@ -346,11 +386,11 @@ typedef struct WASMModule {
 #endif
 
 #if WASM_ENABLE_MULTI_MODULE != 0
-    // TODO: mutex ? mutli-threads ?
+    /* TODO: add mutex for mutli-thread? */
     bh_list import_module_list_head;
     bh_list *import_module_list;
 #endif
-} WASMModule;
+};
 
 typedef struct BlockType {
     /* Block type may be expressed in one of two forms:
@@ -365,10 +405,10 @@ typedef struct BlockType {
 } BlockType;
 
 typedef struct WASMBranchBlock {
-    uint8 label_type;
-    uint32 cell_num;
+    uint8 *begin_addr;
     uint8 *target_addr;
     uint32 *frame_sp;
+    uint32 cell_num;
 } WASMBranchBlock;
 
 /* Execution environment, e.g. stack info */
@@ -425,6 +465,10 @@ wasm_value_type_size(uint8 value_type)
         case VALUE_TYPE_I64:
         case VALUE_TYPE_F64:
             return sizeof(int64);
+#if WASM_ENABLE_SIMD != 0
+        case VALUE_TYPE_V128:
+            return sizeof(int64) * 2;
+#endif
         default:
             bh_assert(0);
     }
@@ -442,6 +486,10 @@ wasm_value_type_cell_num(uint8 value_type)
     else if (value_type == VALUE_TYPE_I64
              || value_type == VALUE_TYPE_F64)
         return 2;
+#if WASM_ENABLE_SIMD != 0
+    else if (value_type == VALUE_TYPE_V128)
+        return 4;
+#endif
     else {
         bh_assert(0);
     }
@@ -464,7 +512,8 @@ wasm_type_equal(const WASMType *type1, const WASMType *type2)
     return (type1->param_count == type2->param_count
             && type1->result_count == type2->result_count
             && memcmp(type1->types, type2->types,
-                      type1->param_count + type1->result_count) == 0)
+                      (uint32)(type1->param_count
+                               + type1->result_count)) == 0)
         ? true : false;
 }
 

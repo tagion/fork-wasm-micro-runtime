@@ -10,8 +10,6 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <time.h>
-#include <sys/time.h>
-#include <sys/timeb.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,14 +17,24 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <signal.h>
 #include <semaphore.h>
 #include <limits.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <poll.h>
+#include <sched.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/time.h>
+#include <sys/timeb.h>
+#include <sys/uio.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/resource.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,15 +55,11 @@ typedef pthread_mutex_t korp_mutex;
 typedef pthread_cond_t korp_cond;
 typedef pthread_t korp_thread;
 
-#define os_printf printf
-#define os_vprintf vprintf
-
 #if WASM_DISABLE_HW_BOUND_CHECK == 0
 #if defined(BUILD_TARGET_X86_64) \
     || defined(BUILD_TARGET_AMD_64) \
     || defined(BUILD_TARGET_AARCH64)
 
-#include <signal.h>
 #include <setjmp.h>
 
 #define OS_ENABLE_HW_BOUND_CHECK

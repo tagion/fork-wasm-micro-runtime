@@ -21,11 +21,11 @@ typedef struct WASMMemoryInstance WASMMemoryInstance;
 typedef struct WASMTableInstance WASMTableInstance;
 typedef struct WASMGlobalInstance WASMGlobalInstance;
 
-typedef struct WASMMemoryInstance {
-#if WASM_ENABLE_SHARED_MEMORY != 0
-    /* shared memory flag */
+struct WASMMemoryInstance {
+    /* Module type */
+    uint32 module_type;
+    /* Shared memory flag */
     bool is_shared;
-#endif
     /* Number bytes per page */
     uint32 num_bytes_per_page;
     /* Current page count */
@@ -33,33 +33,33 @@ typedef struct WASMMemoryInstance {
     /* Maximum page count */
     uint32 max_page_count;
 
-    /* Heap base offset of wasm app */
-    int32 heap_base_offset;
     /* Heap data base address */
     uint8 *heap_data;
+    /* Heap data end address */
+    uint8 *heap_data_end;
     /* The heap created */
     void *heap_handle;
-
-    /* Memory data */
-    uint8 *memory_data;
-
-    /* End address of memory */
-    uint8 *end_addr;
 
 #if WASM_ENABLE_MULTI_MODULE != 0
     /* to indicate which module instance create it */
     WASMModuleInstance *owner;
 #endif
-    /* Base address, the layout is:
-       heap_data + memory data
-       memory data init size is: num_bytes_per_page * cur_page_count
-       Note: when memory is re-allocated, the heap data and memory data
-             must be copied to new memory also.
-     */
-    uint8 base_addr[1];
-} WASMMemoryInstance;
 
-typedef struct WASMTableInstance {
+#if WASM_ENABLE_SHARED_MEMORY != 0
+    /* mutex lock for the memory, used in atomic operation */
+    korp_mutex mem_lock;
+#endif
+
+    /* Memory data end address */
+    uint8 *memory_data_end;
+
+    /* Memory data begin address, the layout is: memory data + heap data
+       Note: when memory is re-allocated, the heap data and memory data
+             must be copied to new memory also. */
+    uint8 *memory_data;
+};
+
+struct WASMTableInstance {
     /* The element type, TABLE_ELEM_TYPE_ANY_FUNC currently */
     uint8 elem_type;
     /* Current size */
@@ -72,9 +72,9 @@ typedef struct WASMTableInstance {
 #endif
     /* Base address */
     uint8 base_addr[1];
-} WASMTableInstance;
+};
 
-typedef struct WASMGlobalInstance {
+struct WASMGlobalInstance {
     /* value type, VALUE_TYPE_I32/I64/F32/F64 */
     uint8 type;
     /* mutable or constant */
@@ -88,9 +88,9 @@ typedef struct WASMGlobalInstance {
     WASMModuleInstance *import_module_inst;
     WASMGlobalInstance *import_global_inst;
 #endif
-} WASMGlobalInstance;
+};
 
-typedef struct WASMFunctionInstance {
+struct WASMFunctionInstance {
     /* whether it is import function or WASM function */
     bool is_import_func;
     /* parameter count */
@@ -120,7 +120,7 @@ typedef struct WASMFunctionInstance {
     WASMModuleInstance *import_module_inst;
     WASMFunctionInstance *import_func_inst;
 #endif
-} WASMFunctionInstance;
+};
 
 typedef struct WASMExportFuncInstance {
     char *name;
@@ -144,7 +144,7 @@ typedef struct WASMExportMemInstance {
 } WASMExportMemInstance;
 #endif
 
-typedef struct WASMModuleInstance {
+struct WASMModuleInstance {
     /* Module instance type, for module instance loaded from
        WASM bytecode binary, this field is Wasm_Module_Bytecode;
        for module instance loaded from AOT file, this field is
@@ -182,6 +182,9 @@ typedef struct WASMModuleInstance {
     uint8 *global_data;
 
     WASMFunctionInstance *start_function;
+    WASMFunctionInstance *malloc_function;
+    WASMFunctionInstance *free_function;
+    WASMFunctionInstance *retain_function;
 
     WASMModule *module;
 
@@ -202,15 +205,16 @@ typedef struct WASMModuleInstance {
      * wasm_set_custom_data/wasm_get_custom_data */
     void *custom_data;
 
-    /* Main exec env */
-    WASMExecEnv *main_exec_env;
-
 #if WASM_ENABLE_MULTI_MODULE != 0
-    // TODO: mutex ? mutli-threads ?
+    /* TODO: add mutex for mutli-threads? */
     bh_list sub_module_inst_list_head;
     bh_list *sub_module_inst_list;
 #endif
-} WASMModuleInstance;
+
+#if WASM_ENABLE_MEMORY_PROFILING != 0
+    uint32 max_aux_stack_used;
+#endif
+};
 
 struct WASMInterpFrame;
 typedef struct WASMInterpFrame WASMRuntimeFrame;
@@ -311,24 +315,24 @@ wasm_set_exception(WASMModuleInstance *module, const char *exception);
 const char*
 wasm_get_exception(WASMModuleInstance *module);
 
-int32
+uint32
 wasm_module_malloc(WASMModuleInstance *module_inst, uint32 size,
                    void **p_native_addr);
 
 void
-wasm_module_free(WASMModuleInstance *module_inst, int32 ptr);
+wasm_module_free(WASMModuleInstance *module_inst, uint32 ptr);
 
-int32
+uint32
 wasm_module_dup_data(WASMModuleInstance *module_inst,
                      const char *src, uint32 size);
 
 bool
 wasm_validate_app_addr(WASMModuleInstance *module_inst,
-                       int32 app_offset, uint32 size);
+                       uint32 app_offset, uint32 size);
 
 bool
 wasm_validate_app_str_addr(WASMModuleInstance *module_inst,
-                           int32 app_offset);
+                           uint32 app_offset);
 
 bool
 wasm_validate_native_addr(WASMModuleInstance *module_inst,
@@ -336,17 +340,17 @@ wasm_validate_native_addr(WASMModuleInstance *module_inst,
 
 void *
 wasm_addr_app_to_native(WASMModuleInstance *module_inst,
-                        int32 app_offset);
+                        uint32 app_offset);
 
-int32
+uint32
 wasm_addr_native_to_app(WASMModuleInstance *module_inst,
                         void *native_ptr);
 
 bool
 wasm_get_app_addr_range(WASMModuleInstance *module_inst,
-                        int32 app_offset,
-                        int32 *p_app_start_offset,
-                        int32 *p_app_end_offset);
+                        uint32 app_offset,
+                        uint32 *p_app_start_offset,
+                        uint32 *p_app_end_offset);
 
 bool
 wasm_get_native_addr_range(WASMModuleInstance *module_inst,
@@ -372,6 +376,13 @@ wasm_get_aux_stack(WASMExecEnv *exec_env,
                    uint32 *start_offset, uint32 *size);
 #endif
 
+void
+wasm_get_module_mem_consumption(const WASMModule *module,
+                                WASMModuleMemConsumption *mem_conspn);
+
+void
+wasm_get_module_inst_mem_consumption(const WASMModuleInstance *module,
+                                     WASMModuleInstMemConsumption *mem_conspn);
 #ifdef __cplusplus
 }
 #endif

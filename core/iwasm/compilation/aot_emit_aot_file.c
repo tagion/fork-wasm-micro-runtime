@@ -153,11 +153,29 @@ get_mem_init_data_list_size(AOTMemInitData **mem_init_data_list,
 }
 
 static uint32
+get_import_memory_size(AOTCompData *comp_data)
+{
+    /* currently we only emit import_memory_count = 0 */
+    return sizeof(uint32);
+}
+
+static uint32
+get_memory_size(AOTCompData *comp_data)
+{
+    /* memory_count + count * (memory_flags + num_bytes_per_page +
+                               init_page_count + max_page_count) */
+    return (uint32)(sizeof(uint32)
+                    + comp_data->memory_count * sizeof(uint32) * 4);
+}
+
+static uint32
 get_mem_info_size(AOTCompData *comp_data)
 {
-    /* num bytes per page + init page count + max page count
-       + init data count + init data list */
-    return (uint32)sizeof(uint32) * 4
+    /* import_memory_size + memory_size
+       + init_data_count + init_data_list */
+    return get_import_memory_size(comp_data)
+           + get_memory_size(comp_data)
+           + (uint32)sizeof(uint32)
            + get_mem_init_data_list_size(comp_data->mem_init_data_list,
                                          comp_data->mem_init_data_count);
 }
@@ -165,9 +183,10 @@ get_mem_info_size(AOTCompData *comp_data)
 static uint32
 get_table_init_data_size(AOTTableInitData *table_init_data)
 {
-    /* init expr type (4 bytes) + init expr value (8 bytes)
+    /* table_index + init expr type (4 bytes) + init expr value (8 bytes)
        + func index count (4 bytes) + func indexes */
-    return (uint32)(sizeof(uint32) + sizeof(uint64) + sizeof(uint32)
+    return (uint32)(sizeof(uint32) + sizeof(uint32)
+                    + sizeof(uint64) + sizeof(uint32)
                     + sizeof(uint32) * table_init_data->func_index_count);
 }
 
@@ -186,10 +205,29 @@ get_table_init_data_list_size(AOTTableInitData **table_init_data_list,
 }
 
 static uint32
+get_import_table_size(AOTCompData *comp_data)
+{
+    /* currently we only emit import_table_count = 0 */
+    return sizeof(uint32);
+}
+
+static uint32
+get_table_size(AOTCompData *comp_data)
+{
+    /* table_count + table_count * (elem_type + table_flags
+     *                              + init_size + max_size) */
+    return (uint32)(sizeof(uint32)
+                    + comp_data->table_count * sizeof(uint32) * 4);
+}
+
+static uint32
 get_table_info_size(AOTCompData *comp_data)
 {
-    /* table size + init data count + init data list */
-    return (uint32)sizeof(uint32) * 2
+    /* import_table size + table_size
+       + init data count + init data list */
+    return get_import_table_size(comp_data)
+           + get_table_size(comp_data)
+           + (uint32)sizeof(uint32)
            + get_table_init_data_list_size(comp_data->table_init_data_list,
                                            comp_data->table_init_data_count);
 }
@@ -261,9 +299,14 @@ get_import_global_info_size(AOTCompData *comp_data)
 static uint32
 get_global_size(AOTGlobal *global)
 {
-    /* type (1 byte) + is_mutable (1 byte)
-       + init expr type (2 byes) + init expr value (8 byes) */
-    return sizeof(uint8) * 2 + sizeof(uint16) + sizeof(uint64);
+    if (global->init_expr.init_expr_type != INIT_EXPR_TYPE_V128_CONST)
+        /* type (1 byte) + is_mutable (1 byte)
+           + init expr type (2 byes) + init expr value (8 byes) */
+        return sizeof(uint8) * 2 + sizeof(uint16) + sizeof(uint64);
+    else
+        /* type (1 byte) + is_mutable (1 byte)
+           + init expr type (2 byes) + v128 value (16 byes) */
+        return sizeof(uint8) * 2 + sizeof(uint16) + sizeof(uint64) * 2;
 }
 
 static uint32
@@ -382,9 +425,8 @@ get_init_data_section_size(AOTCompData *comp_data, AOTObjectData *obj_data)
     size = align_uint(size, 4);
     size += (uint32)sizeof(uint32) * 2;
 
-    /* llvm aux data end + llvm aux stack bottom
-       + llvm aux stack size + llvm stack global index */
-    size += sizeof(uint32) * 4;
+    /* aux data/heap/stack data */
+    size += sizeof(uint32) * 7;
 
     size += get_object_data_section_info_size(obj_data);
     return size;
@@ -412,23 +454,22 @@ get_func_section_size(AOTCompData *comp_data, AOTObjectData *obj_data)
 }
 
 static uint32
-get_export_func_size(AOTExportFunc *export_func)
+get_export_size(AOTExport *export)
 {
-    /* export func index + export func name */
-    return (uint32)sizeof(uint32)
-           + get_string_size(export_func->func_name);
+    /* export index + export kind + 1 byte padding + export name */
+    return (uint32)sizeof(uint32) + sizeof(uint8) + 1
+           + get_string_size(export->name);
 }
 
 static uint32
-get_export_funcs_size(AOTExportFunc *export_funcs,
-                      uint32 export_func_count)
+get_exports_size(AOTExport *exports, uint32 export_count)
 {
-    AOTExportFunc *export_func = export_funcs;
+    AOTExport *export = exports;
     uint32 size = 0, i;
 
-    for (i = 0; i < export_func_count; i++, export_func++) {
+    for (i = 0; i < export_count; i++, export++) {
         size = align_uint(size, 4);
-        size += get_export_func_size(export_func);
+        size += get_export_size(export);
     }
     return size;
 }
@@ -436,10 +477,10 @@ get_export_funcs_size(AOTExportFunc *export_funcs,
 static uint32
 get_export_section_size(AOTCompData *comp_data)
 {
-    /* export func count + export funcs */
+    /* export count + exports */
     return (uint32)sizeof(uint32)
-           + get_export_funcs_size(comp_data->export_funcs,
-                                   comp_data->export_func_count);
+           + get_exports_size(comp_data->wasm_module->exports,
+                              comp_data->wasm_module->export_count);
 }
 
 static uint32
@@ -764,8 +805,26 @@ exchange_uint32(uint8 *p_data)
 static void
 exchange_uint64(uint8 *pData)
 {
+    uint32 value;
+
+    value = *(uint32 *)pData;
+    *(uint32 *)pData = *(uint32 *)(pData + 4);
+    *(uint32 *)(pData + 4) = value;
     exchange_uint32(pData);
     exchange_uint32(pData + 4);
+}
+
+static void
+exchange_uint128(uint8 *pData)
+{
+    /* swap high 64bit and low 64bit */
+    uint64 value = *(uint64*)pData;
+    *(uint64*)pData = *(uint64*)(pData + 8);
+    *(uint64*)(pData + 8) = value;
+    /* exchange high 64bit */
+    exchange_uint64(pData);
+    /* exchange low 64bit */
+    exchange_uint64(pData + 8);
 }
 
 static union {
@@ -812,6 +871,17 @@ static union {
     if (!is_little_endian())                \
       exchange_uint64((uint8*)&t);          \
     PUT_U64_TO_ADDR(buf + offset, t);       \
+    offset += (uint32)sizeof(uint64);       \
+  } while (0)
+
+#define EMIT_V128(v)  do {                  \
+    uint64 *t = (uint64*)v.i64x2;           \
+    CHECK_BUF(16);                          \
+    if (!is_little_endian())                \
+        exchange_uint128((uint8 *)t);       \
+    PUT_U64_TO_ADDR(buf + offset, t[0]);    \
+    offset += (uint32)sizeof(uint64);       \
+    PUT_U64_TO_ADDR(buf + offset, t[1]);    \
     offset += (uint32)sizeof(uint64);       \
   } while (0)
 
@@ -887,11 +957,24 @@ aot_emit_mem_info(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
 
     *p_offset = offset = align_uint(offset, 4);
 
-    EMIT_U32(comp_data->num_bytes_per_page);
-    EMIT_U32(comp_data->mem_init_page_count);
-    EMIT_U32(comp_data->mem_max_page_count);
-    EMIT_U32(comp_data->mem_init_data_count);
+    /* Emit import memory count, only emit 0 currently.
+       TODO: emit the actual import memory count and
+             the full import memory info. */
+    EMIT_U32(0);
 
+    /* Emit memory count */
+    EMIT_U32(comp_data->memory_count);
+    /* Emit memory items */
+    for (i = 0; i < comp_data->memory_count; i++) {
+        EMIT_U32(comp_data->memories[i].memory_flags);
+        EMIT_U32(comp_data->memories[i].num_bytes_per_page);
+        EMIT_U32(comp_data->memories[i].mem_init_page_count);
+        EMIT_U32(comp_data->memories[i].mem_max_page_count);
+    }
+
+    /* Emit mem init data count */
+    EMIT_U32(comp_data->mem_init_data_count);
+    /* Emit mem init data items */
     for (i = 0; i < comp_data->mem_init_data_count; i++) {
         offset = align_uint(offset, 4);
 #if WASM_ENABLE_BULK_MEMORY != 0
@@ -931,11 +1014,27 @@ aot_emit_table_info(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
 
     *p_offset = offset = align_uint(offset, 4);
 
-    EMIT_U32(comp_data->table_size);
-    EMIT_U32(comp_data->table_init_data_count);
+    /* Emit import table count, only emit 0 currently.
+       TODO: emit the actual import table count and
+             the full import table info. */
+    EMIT_U32(0);
 
+    /* Emit table count */
+    EMIT_U32(comp_data->table_count);
+    /* Emit table items */
+    for (i = 0; i < comp_data->table_count; i++) {
+        EMIT_U32(comp_data->tables[i].elem_type);
+        EMIT_U32(comp_data->tables[i].table_flags);
+        EMIT_U32(comp_data->tables[i].table_init_size);
+        EMIT_U32(comp_data->tables[i].table_max_size);
+    }
+
+    /* Emit table init data count */
+    EMIT_U32(comp_data->table_init_data_count);
+    /* Emit table init data items */
     for (i = 0; i < comp_data->table_init_data_count; i++) {
         offset = align_uint(offset, 4);
+        EMIT_U32(init_datas[i]->table_index);
         EMIT_U32(init_datas[i]->offset.init_expr_type);
         EMIT_U64(init_datas[i]->offset.u.i64);
         EMIT_U32(init_datas[i]->func_index_count);
@@ -1028,7 +1127,10 @@ aot_emit_global_info(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
         EMIT_U8(global->type);
         EMIT_U8(global->is_mutable);
         EMIT_U16(global->init_expr.init_expr_type);
-        EMIT_U64(global->init_expr.u.i64);
+        if (global->init_expr.init_expr_type != INIT_EXPR_TYPE_V128_CONST)
+            EMIT_U64(global->init_expr.u.i64);
+        else
+            EMIT_V128(global->init_expr.u.v128);
     }
 
     if (offset - *p_offset != get_global_info_size(comp_data)) {
@@ -1124,10 +1226,13 @@ aot_emit_init_data_section(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
     EMIT_U32(comp_data->func_count);
     EMIT_U32(comp_data->start_func_index);
 
-    EMIT_U32(comp_data->llvm_aux_data_end);
-    EMIT_U32(comp_data->llvm_aux_stack_bottom);
-    EMIT_U32(comp_data->llvm_aux_stack_size);
-    EMIT_U32(comp_data->llvm_aux_stack_global_index);
+    EMIT_U32(comp_data->aux_data_end_global_index);
+    EMIT_U32(comp_data->aux_data_end);
+    EMIT_U32(comp_data->aux_heap_base_global_index);
+    EMIT_U32(comp_data->aux_heap_base);
+    EMIT_U32(comp_data->aux_stack_top_global_index);
+    EMIT_U32(comp_data->aux_stack_bottom);
+    EMIT_U32(comp_data->aux_stack_size);
 
     if (!aot_emit_object_data_section_info(buf, buf_end, &offset, obj_data))
         return false;
@@ -1211,19 +1316,22 @@ aot_emit_export_section(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
                         AOTCompData *comp_data, AOTObjectData *obj_data)
 {
     uint32 section_size = get_export_section_size(comp_data);
-    AOTExportFunc *func = comp_data->export_funcs;;
-    uint32 i, offset = *p_offset, export_func_count = comp_data->export_func_count;
+    AOTExport *export = comp_data->wasm_module->exports;
+    uint32 export_count = comp_data->wasm_module->export_count;
+    uint32 i, offset = *p_offset;
 
     *p_offset = offset = align_uint(offset, 4);
 
     EMIT_U32(AOT_SECTION_TYPE_EXPORT);
     EMIT_U32(section_size);
-    EMIT_U32(export_func_count);
+    EMIT_U32(export_count);
 
-    for (i = 0; i < export_func_count; i++, func++) {
+    for (i = 0; i < export_count; i++, export++) {
         offset = align_uint(offset, 4);
-        EMIT_U32(func->func_index);
-        EMIT_STR(func->func_name);
+        EMIT_U32(export->index);
+        EMIT_U8(export->kind);
+        EMIT_U8(0);
+        EMIT_STR(export->name);
     }
 
     if (offset - *p_offset != section_size + sizeof(uint32) * 2) {
@@ -1328,6 +1436,27 @@ aot_emit_relocation_section(uint8 *buf, uint8 *buf_end, uint32 *p_offset,
     return true;
 }
 
+typedef uint32 U32;
+typedef int32  I32;
+typedef uint16 U16;
+typedef uint8  U8;
+
+struct coff_hdr {
+    U16 u16Machine;
+    U16 u16NumSections;
+    U32 u32DateTimeStamp;
+    U32 u32SymTblPtr;
+    U32 u32NumSymbols;
+    U16 u16PeHdrSize;
+    U16 u16Characs;
+};
+
+#define IMAGE_FILE_MACHINE_AMD64  0x8664
+#define IMAGE_FILE_MACHINE_I386   0x014c
+#define IMAGE_FILE_MACHINE_IA64   0x0200
+
+#define AOT_COFF_BIN_TYPE 6
+
 #define EI_NIDENT 16
 
 typedef uint32  elf32_word;
@@ -1416,7 +1545,8 @@ aot_resolve_target_info(AOTCompContext *comp_ctx, AOTObjectData *obj_data)
     const uint8 *elf_buf = (uint8 *)LLVMGetBufferStart(obj_data->mem_buf);
     uint32 elf_size = (uint32)LLVMGetBufferSize(obj_data->mem_buf);
 
-    if (bin_type != LLVMBinaryTypeELF32L
+    if (bin_type != LLVMBinaryTypeCOFF
+        && bin_type != LLVMBinaryTypeELF32L
         && bin_type != LLVMBinaryTypeELF32B
         && bin_type != LLVMBinaryTypeELF64L
         && bin_type != LLVMBinaryTypeELF64B
@@ -1430,8 +1560,24 @@ aot_resolve_target_info(AOTCompContext *comp_ctx, AOTObjectData *obj_data)
 
     obj_data->target_info.bin_type = bin_type - LLVMBinaryTypeELF32L;
 
-    if (bin_type == LLVMBinaryTypeELF32L
-        || bin_type == LLVMBinaryTypeELF32B) {
+    if (bin_type == LLVMBinaryTypeCOFF) {
+        struct coff_hdr  * coff_header;
+
+        if (!elf_buf || elf_size < sizeof(struct coff_hdr)) {
+            aot_set_last_error("invalid coff_hdr buffer.");
+            return false;
+        }
+        coff_header = (struct coff_hdr *)elf_buf;
+        obj_data->target_info.e_type = 1;
+        obj_data->target_info.e_machine = coff_header->u16Machine;
+        obj_data->target_info.e_version = 1;
+        obj_data->target_info.e_flags = 0;
+
+        if (coff_header->u16Machine == IMAGE_FILE_MACHINE_AMD64)
+            obj_data->target_info.bin_type = AOT_COFF_BIN_TYPE;
+    }
+    else if (bin_type == LLVMBinaryTypeELF32L
+             || bin_type == LLVMBinaryTypeELF32B) {
         struct elf32_ehdr *elf_header;
         bool is_little_bin = bin_type == LLVMBinaryTypeELF32L;
 
@@ -1776,7 +1922,7 @@ fail:
 }
 
 static bool
-is_relocation_section(char *section_name)
+is_relocation_section_name(char *section_name)
 {
     return (!strcmp(section_name, ".rela.text")
             || !strcmp(section_name, ".rel.text")
@@ -1794,19 +1940,32 @@ is_relocation_section(char *section_name)
 }
 
 static bool
+is_relocation_section(LLVMSectionIteratorRef sec_itr)
+{
+    uint32 count = 0;
+    char *name = (char *)LLVMGetSectionName(sec_itr);
+    if (name) {
+        if (is_relocation_section_name(name))
+            return true;
+        else if (!strncmp(name, ".text", strlen(".text"))
+                 && get_relocations_count(sec_itr, &count) && count > 0)
+            return true;
+    }
+    return false;
+}
+
+static bool
 get_relocation_groups_count(AOTObjectData *obj_data, uint32 *p_count)
 {
     uint32 count = 0;
     LLVMSectionIteratorRef sec_itr;
-    char *name;
 
     if (!(sec_itr = LLVMObjectFileCopySectionIterator(obj_data->binary))) {
         aot_set_last_error("llvm get section iterator failed.");
         return false;
     }
     while (!LLVMObjectFileIsSectionIteratorAtEnd(obj_data->binary, sec_itr)) {
-        if ((name = (char *)LLVMGetSectionName(sec_itr))
-            && is_relocation_section(name)) {
+        if (is_relocation_section(sec_itr)) {
             count++;
         }
         LLVMMoveToNextSection(sec_itr);
@@ -1847,8 +2006,8 @@ aot_resolve_object_relocation_groups(AOTObjectData *obj_data)
         return false;
     }
     while (!LLVMObjectFileIsSectionIteratorAtEnd(obj_data->binary, sec_itr)) {
-        if ((name = (char *)LLVMGetSectionName(sec_itr))
-            && is_relocation_section(name)) {
+        if (is_relocation_section(sec_itr)) {
+            name = (char *)LLVMGetSectionName(sec_itr);
             relocation_group->section_name = name;
             if (!aot_resolve_object_relocation_group(
                     obj_data,

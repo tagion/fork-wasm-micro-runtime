@@ -27,7 +27,8 @@ static uint32 cluster_max_thread_num = CLUSTER_MAX_THREAD_NUM;
 void
 wasm_cluster_set_max_thread_num(uint32 num)
 {
-    cluster_max_thread_num = num;
+    if (num > 0)
+        cluster_max_thread_num = num;
 }
 
 bool
@@ -278,6 +279,74 @@ wasm_cluster_del_exec_env(WASMCluster *cluster, WASMExecEnv *exec_env)
     return ret;
 }
 
+WASMExecEnv *
+wasm_cluster_spawn_exec_env(WASMExecEnv *exec_env)
+{
+    WASMCluster *cluster = wasm_exec_env_get_cluster(exec_env);
+    wasm_module_t module = wasm_exec_env_get_module(exec_env);
+    wasm_module_inst_t new_module_inst;
+    WASMExecEnv *new_exec_env;
+    uint32 aux_stack_start, aux_stack_size;
+
+    if (!module) {
+        return NULL;
+    }
+
+    if (!(new_module_inst =
+        wasm_runtime_instantiate_internal(module, true, 8192,
+                                          0, NULL, 0))) {
+        return NULL;
+    }
+
+    new_exec_env = wasm_exec_env_create_internal(
+                        new_module_inst, exec_env->wasm_stack_size);
+    if (!new_exec_env)
+        goto fail1;
+
+    if (!allocate_aux_stack(cluster, &aux_stack_start, &aux_stack_size)) {
+        LOG_ERROR("thread manager error: "
+                  "failed to allocate aux stack space for new thread");
+        goto fail2;
+    }
+
+    /* Set aux stack for current thread */
+    if (!wasm_exec_env_set_aux_stack(new_exec_env, aux_stack_start,
+                                     aux_stack_size)) {
+        goto fail3;
+    }
+
+    if (!wasm_cluster_add_exec_env(cluster, new_exec_env))
+        goto fail3;
+
+    return new_exec_env;
+
+fail3:
+    /* free the allocated aux stack space */
+    free_aux_stack(cluster, aux_stack_start);
+fail2:
+    wasm_exec_env_destroy(new_exec_env);
+fail1:
+    wasm_runtime_deinstantiate_internal(new_module_inst, true);
+
+    return NULL;
+}
+
+void
+wasm_cluster_destroy_spawned_exec_env(WASMExecEnv *exec_env)
+{
+    WASMCluster *cluster = wasm_exec_env_get_cluster(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    bh_assert(cluster != NULL);
+
+    /* Free aux stack space */
+    free_aux_stack(cluster,
+                   exec_env->aux_stack_boundary + cluster->stack_size);
+    wasm_cluster_del_exec_env(cluster, exec_env);
+    wasm_exec_env_destroy_internal(exec_env);
+
+    wasm_runtime_deinstantiate_internal(module_inst, true);
+}
+
 /* start routine of thread manager */
 static void*
 thread_manager_start_routine(void *arg)
@@ -289,6 +358,11 @@ thread_manager_start_routine(void *arg)
 
     exec_env->handle = os_self_thread();
     ret = exec_env->thread_start_routine(exec_env);
+
+#ifdef OS_ENABLE_HW_BOUND_CHECK
+    if (exec_env->suspend_flags.flags & 0x08)
+        ret = exec_env->thread_ret_value;
+#endif
 
     /* Routine exit */
     /* Free aux stack space */
@@ -376,6 +450,25 @@ wasm_cluster_exit_thread(WASMExecEnv *exec_env, void *retval)
 {
     WASMCluster *cluster;
 
+#ifdef OS_ENABLE_HW_BOUND_CHECK
+    if (exec_env->jmpbuf_stack_top) {
+        WASMJmpBuf *jmpbuf_node;
+
+        /* Store the return value in exec_env */
+        exec_env->thread_ret_value = retval;
+        exec_env->suspend_flags.flags |= 0x08;
+
+        /* Free all jmpbuf_node except the last one */
+        while (exec_env->jmpbuf_stack_top->prev) {
+            jmpbuf_node = wasm_exec_env_pop_jmpbuf(exec_env);
+            wasm_runtime_free(jmpbuf_node);
+        }
+        jmpbuf_node = exec_env->jmpbuf_stack_top;
+        os_longjmp(jmpbuf_node->jmpbuf, 1);
+        return;
+    }
+#endif
+
     cluster = wasm_exec_env_get_cluster(exec_env);
     bh_assert(cluster);
 
@@ -396,7 +489,7 @@ int32
 wasm_cluster_cancel_thread(WASMExecEnv *exec_env)
 {
     /* Set the termination flag */
-    exec_env->suspend_flags |= 0x01;
+    exec_env->suspend_flags.flags |= 0x01;
     return 0;
 }
 
@@ -446,7 +539,7 @@ void
 wasm_cluster_suspend_thread(WASMExecEnv *exec_env)
 {
     /* Set the suspend flag */
-    exec_env->suspend_flags |= 0x02;
+    exec_env->suspend_flags.flags |= 0x02;
 }
 
 static void
@@ -479,7 +572,7 @@ wasm_cluster_suspend_all_except_self(WASMCluster *cluster,
 void
 wasm_cluster_resume_thread(WASMExecEnv *exec_env)
 {
-    exec_env->suspend_flags &= ~0x02;
+    exec_env->suspend_flags.flags &= ~0x02;
 }
 
 static void

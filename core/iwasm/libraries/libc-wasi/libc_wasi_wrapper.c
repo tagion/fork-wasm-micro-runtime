@@ -4,8 +4,7 @@
  */
 
 #include "libc_wasi_wrapper.h"
-#include "bh_common.h"
-#include "bh_log.h"
+#include "bh_platform.h"
 #include "wasm_export.h"
 
 void
@@ -41,54 +40,52 @@ typedef struct wasi_prestat_app {
 } wasi_prestat_app_t;
 
 typedef struct iovec_app {
-    int32 buf_offset;
+    uint32 buf_offset;
     uint32 buf_len;
 } iovec_app_t;
 
 typedef struct WASIContext {
-    int32 curfds_offset;
-    int32 prestats_offset;
-    int32 argv_environ_offset;
+    struct fd_table *curfds;
+    struct fd_prestats *prestats;
+    struct argv_environ_values *argv_environ;
+    char *argv_buf;
+    char **argv_list;
+    char *env_buf;
+    char **env_list;
 } *wasi_ctx_t;
 
 wasi_ctx_t
 wasm_runtime_get_wasi_ctx(wasm_module_inst_t module_inst);
 
-static struct fd_table *
+static inline struct fd_table *
 wasi_ctx_get_curfds(wasm_module_inst_t module_inst,
                     wasi_ctx_t wasi_ctx)
 {
     if (!wasi_ctx)
         return NULL;
-    return (struct fd_table *)
-        wasm_runtime_addr_app_to_native(module_inst,
-                                        wasi_ctx->curfds_offset);
+    return wasi_ctx->curfds;
 }
 
-static struct argv_environ_values *
+static inline struct argv_environ_values *
 wasi_ctx_get_argv_environ(wasm_module_inst_t module_inst,
                           wasi_ctx_t wasi_ctx)
 {
     if (!wasi_ctx)
         return NULL;
-    return (struct argv_environ_values *)
-        wasm_runtime_addr_app_to_native(module_inst,
-                                        wasi_ctx->argv_environ_offset);
+    return wasi_ctx->argv_environ;
 }
 
-static struct fd_prestats *
+static inline struct fd_prestats *
 wasi_ctx_get_prestats(wasm_module_inst_t module_inst,
                       wasi_ctx_t wasi_ctx)
 {
     if (!wasi_ctx)
         return NULL;
-    return (struct fd_prestats *)
-        wasm_runtime_addr_app_to_native(module_inst,
-                                        wasi_ctx->prestats_offset);
+    return wasi_ctx->prestats;
 }
 
 static wasi_errno_t
-wasi_args_get(wasm_exec_env_t exec_env, int32 *argv_offsets, char *argv_buf)
+wasi_args_get(wasm_exec_env_t exec_env, uint32 *argv_offsets, char *argv_buf)
 {
     wasm_module_inst_t module_inst = get_module_inst(exec_env);
     wasi_ctx_t wasi_ctx = get_wasi_ctx(module_inst);
@@ -149,9 +146,7 @@ wasi_args_sizes_get(wasm_exec_env_t exec_env,
         || !validate_native_addr(argv_buf_size_app, sizeof(uint32)))
         return (wasi_errno_t)-1;
 
-    argv_environ = (struct argv_environ_values *)
-        wasm_runtime_addr_app_to_native(module_inst,
-                                        wasi_ctx->argv_environ_offset);
+    argv_environ = wasi_ctx->argv_environ;
 
     err = wasmtime_ssp_args_sizes_get(argv_environ,
                                       &argc, &argv_buf_size);
@@ -192,7 +187,7 @@ wasi_clock_time_get(wasm_exec_env_t exec_env,
 
 static wasi_errno_t
 wasi_environ_get(wasm_exec_env_t exec_env,
-                 int32 *environ_offsets, char *environ_buf)
+                 uint32 *environ_offsets, char *environ_buf)
 {
     wasm_module_inst_t module_inst = get_module_inst(exec_env);
     wasi_ctx_t wasi_ctx = get_wasi_ctx(module_inst);
@@ -345,7 +340,6 @@ wasi_fd_pread(wasm_exec_env_t exec_env,
     wasi_iovec_t *iovec, *iovec_begin;
     uint64 total_size;
     size_t nread;
-    int32 mem;
     uint32 i;
     wasi_errno_t err;
 
@@ -360,7 +354,7 @@ wasi_fd_pread(wasm_exec_env_t exec_env,
 
     total_size = sizeof(wasi_iovec_t) * (uint64)iovs_len;
     if (total_size >= UINT32_MAX
-        || !(mem = module_malloc((uint32)total_size, (void**)&iovec_begin)))
+        || !(iovec_begin = wasm_runtime_malloc((uint32)total_size)))
         return (wasi_errno_t)-1;
 
     iovec = iovec_begin;
@@ -385,7 +379,7 @@ wasi_fd_pread(wasm_exec_env_t exec_env,
     err = 0;
 
 fail:
-    module_free(mem);
+    wasm_runtime_free(iovec_begin);
     return err;
 }
 
@@ -400,7 +394,6 @@ wasi_fd_pwrite(wasm_exec_env_t exec_env,
     wasi_ciovec_t *ciovec, *ciovec_begin;
     uint64 total_size;
     size_t nwritten;
-    int32 mem;
     uint32 i;
     wasi_errno_t err;
 
@@ -415,7 +408,7 @@ wasi_fd_pwrite(wasm_exec_env_t exec_env,
 
     total_size = sizeof(wasi_ciovec_t) * (uint64)iovs_len;
     if (total_size >= UINT32_MAX
-        || !(mem = module_malloc((uint32)total_size, (void**)&ciovec_begin)))
+        || !(ciovec_begin = wasm_runtime_malloc((uint32)total_size)))
         return (wasi_errno_t)-1;
 
     ciovec = ciovec_begin;
@@ -440,7 +433,7 @@ wasi_fd_pwrite(wasm_exec_env_t exec_env,
     err = 0;
 
 fail:
-    module_free(mem);
+    wasm_runtime_free(ciovec_begin);
     return err;
 }
 
@@ -456,7 +449,6 @@ wasi_fd_read(wasm_exec_env_t exec_env,
     uint64 total_size;
     size_t nread;
     uint32 i;
-    int32 mem;
     wasi_errno_t err;
 
     if (!wasi_ctx)
@@ -470,7 +462,7 @@ wasi_fd_read(wasm_exec_env_t exec_env,
 
     total_size = sizeof(wasi_iovec_t) * (uint64)iovs_len;
     if (total_size >= UINT32_MAX
-        || !(mem = module_malloc((uint32)total_size, (void**)&iovec_begin)))
+        || !(iovec_begin = wasm_runtime_malloc((uint32)total_size)))
         return (wasi_errno_t)-1;
 
     iovec = iovec_begin;
@@ -495,7 +487,7 @@ wasi_fd_read(wasm_exec_env_t exec_env,
     err = 0;
 
 fail:
-    module_free(mem);
+    wasm_runtime_free(iovec_begin);
     return err;
 }
 
@@ -627,7 +619,6 @@ wasi_fd_write(wasm_exec_env_t exec_env, wasi_fd_t fd,
     wasi_ciovec_t *ciovec, *ciovec_begin;
     uint64 total_size;
     size_t nwritten;
-    int32 mem;
     uint32 i;
     wasi_errno_t err;
 
@@ -642,7 +633,7 @@ wasi_fd_write(wasm_exec_env_t exec_env, wasi_fd_t fd,
 
     total_size = sizeof(wasi_ciovec_t) * (uint64)iovs_len;
     if (total_size >= UINT32_MAX
-        || !(mem = module_malloc((uint32)total_size, (void**)&ciovec_begin)))
+        || !(ciovec_begin = wasm_runtime_malloc((uint32)total_size)))
         return (wasi_errno_t)-1;
 
     ciovec = ciovec_begin;
@@ -667,7 +658,7 @@ wasi_fd_write(wasm_exec_env_t exec_env, wasi_fd_t fd,
     err = 0;
 
 fail:
-    module_free(mem);
+    wasm_runtime_free(ciovec_begin);
     return err;
 }
 
@@ -754,7 +745,7 @@ wasi_path_open(wasm_exec_env_t exec_env,
     wasm_module_inst_t module_inst = get_module_inst(exec_env);
     wasi_ctx_t wasi_ctx = get_wasi_ctx(module_inst);
     struct fd_table *curfds = wasi_ctx_get_curfds(module_inst, wasi_ctx);
-    wasi_fd_t fd = -1; /* set fd_app -1 if path open failed */
+    wasi_fd_t fd = (wasi_fd_t)-1; /* set fd_app -1 if path open failed */
     wasi_errno_t err;
 
     if (!wasi_ctx)
@@ -1016,9 +1007,13 @@ wasi_poll_oneoff(wasm_exec_env_t exec_env,
     return 0;
 }
 
-void wasi_proc_exit(wasm_exec_env_t exec_env, wasi_exitcode_t rval)
+static void
+wasi_proc_exit(wasm_exec_env_t exec_env, wasi_exitcode_t rval)
 {
     wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    /* Here throwing exception is just to let wasm app exit,
+       the upper layer should clear the exception and return
+       as normal */
     wasm_runtime_set_exception(module_inst, "wasi proc exit");
 }
 
@@ -1053,7 +1048,6 @@ wasi_sock_recv(wasm_exec_env_t exec_env,
     wasi_iovec_t *iovec, *iovec_begin;
     uint64 total_size;
     size_t ro_datalen;
-    int32 mem;
     uint32 i;
     wasi_errno_t err;
 
@@ -1069,7 +1063,7 @@ wasi_sock_recv(wasm_exec_env_t exec_env,
 
     total_size = sizeof(wasi_iovec_t) * (uint64)ri_data_len;
     if (total_size >= UINT32_MAX
-        || !(mem = module_malloc((uint32)total_size, (void**)&iovec_begin)))
+        || !(iovec_begin = wasm_runtime_malloc((uint32)total_size)))
         return (wasi_errno_t)-1;
 
     iovec = iovec_begin;
@@ -1096,7 +1090,7 @@ wasi_sock_recv(wasm_exec_env_t exec_env,
     err = 0;
 
 fail:
-    module_free(mem);
+    wasm_runtime_free(iovec_begin);
     return err;
 }
 
@@ -1113,7 +1107,6 @@ wasi_sock_send(wasm_exec_env_t exec_env,
     wasi_ciovec_t *ciovec, *ciovec_begin;
     uint64 total_size;
     size_t so_datalen;
-    int32 mem;
     uint32 i;
     wasi_errno_t err;
 
@@ -1128,7 +1121,7 @@ wasi_sock_send(wasm_exec_env_t exec_env,
 
     total_size = sizeof(wasi_ciovec_t) * (uint64)si_data_len;
     if (total_size >= UINT32_MAX
-        || !(mem = module_malloc((uint32)total_size, (void**)&ciovec_begin)))
+        || !(ciovec_begin = wasm_runtime_malloc((uint32)total_size)))
         return (wasi_errno_t)-1;
 
     ciovec = ciovec_begin;
@@ -1154,7 +1147,7 @@ wasi_sock_send(wasm_exec_env_t exec_env,
     err = 0;
 
 fail:
-    module_free(mem);
+    wasm_runtime_free(ciovec_begin);
     return err;
 }
 

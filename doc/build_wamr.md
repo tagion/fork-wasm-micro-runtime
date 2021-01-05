@@ -1,33 +1,29 @@
 
-Build WAMR core (iwasm)
+Build WAMR vmcore (iwasm)
 =========================
 It is recommended to use the [WAMR SDK](../wamr-sdk) tools to build a project that integrates the WAMR. This document introduces how to build the WAMR minimal product which is vmcore only (no app-framework and app-mgr) for multiple platforms.
 
+## WAMR vmcore cmake building configurations
 
-
-## iwasm VM core CMake building configurations
-
-By including the script `runtime_lib.cmake` under folder [build-scripts](../build-scripts) in CMakeList.txt, it is easy to build minimal product with CMake.
+By including the script `runtime_lib.cmake` under folder [build-scripts](../build-scripts) in CMakeList.txt, it is easy to build minimal product with cmake.
 
 ```cmake
-# add this in your CMakeList.text
+# add this into your CMakeList.txt
 include (${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 add_library(vmlib ${WAMR_RUNTIME_LIB_SOURCE})
 ```
 
-
-
-The script `runtime_lib.cmake` defined a number of variables for configuring the WAMR runtime features. You can set these variables in your CMakeList.txt or pass the configurations from cmake command line.
+The script `runtime_lib.cmake` defines a number of variables for configuring the WAMR runtime features. You can set these variables in your CMakeList.txt or pass the configurations from cmake command line.
 
 #### **Configure platform and architecture**
 
 - **WAMR_BUILD_PLATFORM**:  set the target platform. It can be set to any platform name (folder name) under folder [core/shared/platform](../core/shared/platform).
 
-- **WAMR_BUILD_TARGET**: set the target CPU architecture. Current supported targets:  X86_64, X86_32, AArch64, ARM, THUMB, XTENSA and MIPS. For AArch64, ARM and THUMB, the format is <arch>[<sub-arch>][_VFP] where <sub-arch> is the ARM sub-architecture and the "_VFP" suffix means VFP coprocessor registers s0-s15 (d0-d7) are used for passing arguments or returning results in standard procedure-call. Both <sub-arch> and "_VFP" are optional. e.g. AARCH64, AARCH64V8, AARCHV8.1, ARMV7, ARMV7_VFP, THUMBV7, THUMBV7_VFP and so on.
+- **WAMR_BUILD_TARGET**: set the target CPU architecture. Current supported targets are:  X86_64, X86_32, AArch64, ARM, THUMB, XTENSA and MIPS. For AArch64, ARM and THUMB, the format is \<arch>\[\<sub-arch>]\[_VFP] where \<sub-arch> is the ARM sub-architecture and the "_VFP" suffix means VFP coprocessor registers s0-s15 (d0-d7) are used for passing arguments or returning results in standard procedure-call. Both \<sub-arch> and "_VFP" are optional, e.g. AARCH64, AARCH64V8, AARCHV8.1, ARMV7, ARMV7_VFP, THUMBV7, THUMBV7_VFP and so on.
 
-  ```bash
-  cmake -DWAMR_BUILD_PLATFORM=linux -DWAMR_BUILD_TARGET=ARM
-  ```
+```bash
+cmake -DWAMR_BUILD_PLATFORM=linux -DWAMR_BUILD_TARGET=ARM
+```
 
 #### **Configure interpreter**
 
@@ -35,18 +31,24 @@ The script `runtime_lib.cmake` defined a number of variables for configuring the
 
 - **WAMR_BUILD_FAST_INTERP**=1/0：build fast (default) or classic WASM interpreter.
 
-  NOTE: the fast interpreter will run ~2X faster than classic interpreter, but it consumes about 2X memory to hold the WASM bytecode code.
+  NOTE: the fast interpreter runs ~2X faster than classic interpreter, but consumes about 2X memory to hold the WASM bytecode code.
 
 #### **Configure AoT and JIT**
 
-- **WAMR_BUILD_AOT**=1/0
-- **WAMR_BUILD_JIT**=1/0 , (Disabled if no set)
+- **WAMR_BUILD_AOT**=1/0, default to enable if not set
+- **WAMR_BUILD_JIT**=1/0 , default to disable if not set
 
 #### **Configure LIBC**
 
-- **WAMR_BUILD_LIBC_BUILTIN**=1/0,  default to enable if no set
+- **WAMR_BUILD_LIBC_BUILTIN**=1/0,  default to enable if not set
 
-- **WAMR_BUILD_LIBC_WASI**=1/0, default to enable if no set
+- **WAMR_BUILD_LIBC_WASI**=1/0, default to enable if not set
+
+#### **Configure Debug**
+
+- **WAMR_BUILD_CUSTOM_NAME_SECTION**=1/0,  load the function name from custom name section, default to disable if not set
+
+> Note: if it is enabled, the call stack will be dumped when exception occurs.
 
 #### **Enable Multi-Module feature**
 
@@ -55,7 +57,8 @@ The script `runtime_lib.cmake` defined a number of variables for configuring the
 #### **Enable WASM mini loader**
 
 - **WAMR_BUILD_MINI_LOADER**=1/0, default to disable if not set
-Note: the mini loader doesn't check the integrity of the WASM binary file, developer must ensure that the WASM file is not mal-formed.
+
+> Note: the mini loader doesn't check the integrity of the WASM binary file, developer must ensure that the WASM file is well-formed.
 
 #### **Enable shared memory feature**
 - **WAMR_BUILD_SHARED_MEMORY**=1/0, default to disable if not set
@@ -68,8 +71,24 @@ Note: the mini loader doesn't check the integrity of the WASM binary file, devel
 > Note: The dependent feature of lib pthread such as the `shared memory` and `thread manager` will be enabled automatically.
 
 #### **Disable boundary check with hardware trap in AOT or JIT mode**
-- **WAMR_DISABLE_HW_BOUND_CHECK=1, default to enable if not set and supported by platform
+- **WAMR_DISABLE_HW_BOUND_CHECK**=1/0, default to enable if not set and supported by platform
 > Note: by default only platform linux/darwin/android/vxworks 64-bit will enable boundary check with hardware trap in AOT or JIT mode, and the wamrc tool will generate AOT code without boundary check instructions in all 64-bit targets except SGX to improve performance.
+
+#### **Enable memory profiling (Experiment)**
+- **WAMR_BUILD_MEMORY_PROFILING**=1/0, default to disable if not set
+> Note: if it is enabled, developer can use API `void wasm_runtime_dump_mem_consumption(wasm_exec_env_t exec_env)` to dump the memory consumption info.
+Currently we only profile the memory consumption of module, module_instance and exec_env, the memory consumed by other components such as `wasi-ctx`, `multi-module` and `thread-manager` are not included.
+
+#### **Set maximum app thread stack size**
+- **WAMR_APP_THREAD_STACK_SIZE_MAX**=n, default to 8 MB (8388608) if not set
+> Note: the AOT boundary check with hardware trap mechanism might consume large stack since the OS may lazily grow the stack mapping as a guard page is hit, we may use this configuration to reduce the total stack usage, e.g. -DWAMR_APP_THREAD_STACK_SIZE_MAX=131072 (128 KB).
+
+#### **Enable tail call feature**
+- **WAMR_BUILD_TAIL_CALL**=1/0, default to disable if not set
+
+#### **Enable 128-bit SIMD feature**
+- **WAMR_BUILD_SIMD**=1/0, default to disable if not set
+> Note: only supported in AOT mode, and the *--enable-simd* flag should be added for wamrc when generating aot file.
 
 **Combination of configurations:**
 
@@ -85,8 +104,6 @@ Or if we want to enable interpreter, disable AOT and WASI, and build as X86_32, 
 cmake .. -DWAMR_BUILD_INTERP=1 -DWAMR_BUILD_AOT=0 -DWAMR_BUILD_LIBC_WASI=0 -DWAMR_BUILD_TARGET=X86_32
 ```
 
-
-
 ## Cross compilation
 
 If you are building for ARM architecture on a X86 development machine, you can use the `CMAKE_TOOLCHAIN_FILE`  to set the toolchain file for cross compling.
@@ -97,9 +114,7 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=$TOOL_CHAIN_FILE  \
          -DWAMR_BUILD_TARGET=ARM
 ```
 
-Refer to toochain sample file [`samples/simple/profiles/arm-interp/toolchain.cmake`](../samples/simple/profiles/arm-interp/toolchain.cmake) for how to build mini product for ARM target architecture.
-
-
+Refer to toolchain sample file [`samples/simple/profiles/arm-interp/toolchain.cmake`](../samples/simple/profiles/arm-interp/toolchain.cmake) for how to build mini product for ARM target architecture.
 
 Linux
 -------------------------
@@ -147,40 +162,14 @@ cmake .. -DWAMR_BUILD_JIT=1
 make
 ```
 
-
-
-Linux SGX (Intel Software Guard Extention)
+Linux SGX (Intel Software Guard Extension)
 -------------------------
 
-First of all please install the [Intel SGX SDK](https://software.intel.com/en-us/sgx/sdk).
-
-After installing dependencies, build the source code:
-``` Bash
-source <SGX_SDK dir>/environment
-cd product-mini/platforms/linux-sgx/
-mkdir build
-cd build
-cmake ..
-make
-```
-This builds the libraries used by SGX enclave sample, the generated file libvmlib.a and libextlib.a will be copied to enclave-sample folder.
-
-Then build the enclave sample:
-``` Bash
-source <SGX_SDK dir>/environment
-cd enclave-sample
-make
-```
-The binary file app will be generated.
-
-To run the sample:
-``` Bash
-source <SGX_SDK dir>/environment
-./app
-```
+Please see [Build and Port WAMR vmcore for Linux SGX](./linux_sgx.md) for the details.
 
 MacOS
 -------------------------
+
 Make sure to install Xcode from App Store firstly, and install cmake.
 
 If you use Homebrew, install cmake from the command line:
@@ -189,7 +178,7 @@ brew install cmake
 ```
 
 Then build the source codes:
-```
+``` Bash
 cd product-mini/platforms/darwin/
 mkdir build
 cd build
@@ -197,7 +186,22 @@ cmake ..
 make
 ```
 Note:
-WAMR provides some features which can be easily configured by passing options to cmake, please see [Linux platform](./build_wamr.md#linux) for details. Currently in MacOS, interpreter, AoT, and builtin libc are enabled by default.
+WAMR provides some features which can be easily configured by passing options to cmake, please see [WAMR vmcore cmake building configurations](./build_wamr.md#wamr-vmcore-cmake-building-configurations) for details. Currently in MacOS, interpreter, AoT, and builtin libc are enabled by default.
+
+Windows
+-------------------------
+
+Make sure `MSVC` and `cmake` are installed and available in the command line environment
+
+Then build the source codes:
+``` Bash
+cd product-mini/platforms/windows/
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+```
+The executable file is `build/Release/iwasm.exe`
 
 VxWorks
 -------------------------
@@ -227,7 +231,7 @@ shared libraries (libc.so.1, libllvm.so.1 or libgnu.so.1 depending on the VSB,
 libunix.so.1) to a supported file system (eg: romfs).
 
 Note:
-WAMR provides some features which can be easily configured by passing options to cmake, please see [Linux platform](./build_wamr.md#linux) for details. Currently in VxWorks, interpreter and builtin libc are enabled by default.
+WAMR provides some features which can be easily configured by passing options to cmake, please see [WAMR vmcore cmake building configurations](./build_wamr.md#wamr-vmcore-cmake-building-configurations) for details. Currently in VxWorks, interpreter and builtin libc are enabled by default.
 
 Zephyr
 -------------------------
@@ -245,7 +249,7 @@ source ../../zephyr-env.sh
 ```
 
 Note:
-WAMR provides some features which can be easily configured by passing options to cmake, please see [Linux platform](./build_wamr.md#linux) for details. Currently in Zephyr, interpreter, AoT and builtin libc are enabled by default.
+WAMR provides some features which can be easily configured by passing options to cmake, please see [WAMR vmcore cmake building configurations](./build_wamr.md#wamr-vmcore-cmake-building-configurations) for details. Currently in Zephyr, interpreter, AoT and builtin libc are enabled by default.
 
 
 AliOS-Things
@@ -330,6 +334,9 @@ $ # include/ includes all necesary head files
 $ # lib includes libiwasm.so
 ```
 
+NuttX
+-------------------------
+WAMR is intergrated with NuttX, just enable the WAMR in Kconfig option (Application Configuration/Interpreters).
 
 Docker
 -------------------------

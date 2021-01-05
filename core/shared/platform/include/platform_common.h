@@ -19,8 +19,7 @@ extern "C" {
 #define BHT_TIMED_OUT (1)
 #define BHT_OK (0)
 
-#define BHT_NO_WAIT 0x00000000
-#define BHT_WAIT_FOREVER 0xFFFFFFFF
+#define BHT_WAIT_FOREVER ((uint64)-1LL)
 
 #define BH_KB (1024)
 #define BH_MB ((BH_KB)*1024)
@@ -34,17 +33,32 @@ extern "C" {
 #define BH_FREE os_free
 #endif
 
+#if defined(MSVC)
+__declspec(dllimport)  void *BH_MALLOC(unsigned int size);
+__declspec(dllimport)  void BH_FREE(void *ptr);
+#else
 void *BH_MALLOC(unsigned int size);
 void BH_FREE(void *ptr);
+#endif
 
 #ifndef NULL
 #define NULL (void*)0
 #endif
 
 #ifndef __cplusplus
+
+#ifndef true
 #define true 1
+#endif
+
+#ifndef false
 #define false 0
+#endif
+
+#ifndef inline
 #define inline __inline
+#endif
+
 #endif
 
 /* Return the offset of the given field in the given type */

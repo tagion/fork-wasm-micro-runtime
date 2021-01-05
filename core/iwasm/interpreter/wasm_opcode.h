@@ -34,9 +34,9 @@ typedef enum WASMOpcode {
     WASM_OP_RETURN        = 0x0f, /* return */
     WASM_OP_CALL          = 0x10, /* call */
     WASM_OP_CALL_INDIRECT = 0x11, /* call_indirect */
+    WASM_OP_RETURN_CALL   = 0x12, /* return_call */
+    WASM_OP_RETURN_CALL_INDIRECT = 0x13, /* return_call_indirect */
 
-    WASM_OP_UNUSED_0x12   = 0x12,
-    WASM_OP_UNUSED_0x13   = 0x13,
     WASM_OP_UNUSED_0x14   = 0x14,
     WASM_OP_UNUSED_0x15   = 0x15,
     WASM_OP_UNUSED_0x16   = 0x16,
@@ -263,6 +263,8 @@ typedef enum WASMOpcode {
 
     /* Post-MVP extend op prefix */
     WASM_OP_MISC_PREFIX           = 0xfc,
+    WASM_OP_SIMD_PREFIX           = 0xfd,
+    WASM_OP_ATOMIC_PREFIX         = 0xfe,
 } WASMOpcode;
 
 typedef enum WASMMiscEXTOpcode {
@@ -285,8 +287,320 @@ typedef enum WASMMiscEXTOpcode {
 #endif
 } WASMMiscEXTOpcode;
 
+typedef enum WASMSimdEXTOpcode {
+    /* memory instruction */
+    SIMD_v128_load        = 0x00,
+    SIMD_i16x8_load8x8_s  = 0x01,
+    SIMD_i16x8_load8x8_u  = 0x02,
+    SIMD_i32x4_load16x4_s = 0x03,
+    SIMD_i32x4_load16x4_u = 0x04,
+    SIMD_i64x2_load32x2_s = 0x05,
+    SIMD_i64x2_load32x2_u = 0x06,
+    SIMD_v8x16_load_splat = 0x07,
+    SIMD_v16x8_load_splat = 0x08,
+    SIMD_v32x4_load_splat = 0x09,
+    SIMD_v64x2_load_splat = 0x0a,
+    SIMD_v128_store       = 0x0b,
+
+    /* basic operation */
+    SIMD_v128_const       = 0x0c,
+    SIMD_v8x16_shuffle    = 0x0d,
+    SIMD_v8x16_swizzle    = 0x0e,
+
+    /* splat operation */
+    SIMD_i8x16_splat      = 0x0f,
+    SIMD_i16x8_splat      = 0x10,
+    SIMD_i32x4_splat      = 0x11,
+    SIMD_i64x2_splat      = 0x12,
+    SIMD_f32x4_splat      = 0x13,
+    SIMD_f64x2_splat      = 0x14,
+
+    /* lane operation */
+    SIMD_i8x16_extract_lane_s = 0x15,
+    SIMD_i8x16_extract_lane_u = 0x16,
+    SIMD_i8x16_replace_lane   = 0x17,
+    SIMD_i16x8_extract_lane_s = 0x18,
+    SIMD_i16x8_extract_lane_u = 0x19,
+    SIMD_i16x8_replace_lane   = 0x1a,
+    SIMD_i32x4_extract_lane   = 0x1b,
+    SIMD_i32x4_replace_lane   = 0x1c,
+    SIMD_i64x2_extract_lane   = 0x1d,
+    SIMD_i64x2_replace_lane   = 0x1e,
+    SIMD_f32x4_extract_lane   = 0x1f,
+    SIMD_f32x4_replace_lane   = 0x20,
+    SIMD_f64x2_extract_lane   = 0x21,
+    SIMD_f64x2_replace_lane   = 0x22,
+
+    /* i8x16 compare operation */
+    SIMD_i8x16_eq    = 0x23,
+    SIMD_i8x16_ne    = 0x24,
+    SIMD_i8x16_lt_s  = 0x25,
+    SIMD_i8x16_lt_u  = 0x26,
+    SIMD_i8x16_gt_s  = 0x27,
+    SIMD_i8x16_gt_u  = 0x28,
+    SIMD_i8x16_le_s  = 0x29,
+    SIMD_i8x16_le_u  = 0x2a,
+    SIMD_i8x16_ge_s  = 0x2b,
+    SIMD_i8x16_ge_u  = 0x2c,
+
+    /* i16x8 compare operation */
+    SIMD_i16x8_eq    = 0x2d,
+    SIMD_i16x8_ne    = 0x2e,
+    SIMD_i16x8_lt_s  = 0x2f,
+    SIMD_i16x8_lt_u  = 0x30,
+    SIMD_i16x8_gt_s  = 0x31,
+    SIMD_i16x8_gt_u  = 0x32,
+    SIMD_i16x8_le_s  = 0x33,
+    SIMD_i16x8_le_u  = 0x34,
+    SIMD_i16x8_ge_s  = 0x35,
+    SIMD_i16x8_ge_u  = 0x36,
+
+    /* i32x4 compare operation */
+    SIMD_i32x4_eq    = 0x37,
+    SIMD_i32x4_ne    = 0x38,
+    SIMD_i32x4_lt_s  = 0x39,
+    SIMD_i32x4_lt_u  = 0x3a,
+    SIMD_i32x4_gt_s  = 0x3b,
+    SIMD_i32x4_gt_u  = 0x3c,
+    SIMD_i32x4_le_s  = 0x3d,
+    SIMD_i32x4_le_u  = 0x3e,
+    SIMD_i32x4_ge_s  = 0x3f,
+    SIMD_i32x4_ge_u  = 0x40,
+
+    /* f32x4 compare operation */
+    SIMD_f32x4_eq    = 0x41,
+    SIMD_f32x4_ne    = 0x42,
+    SIMD_f32x4_lt    = 0x43,
+    SIMD_f32x4_gt    = 0x44,
+    SIMD_f32x4_le    = 0x45,
+    SIMD_f32x4_ge    = 0x46,
+
+    /* f64x2 compare operation */
+    SIMD_f64x2_eq    = 0x47,
+    SIMD_f64x2_ne    = 0x48,
+    SIMD_f64x2_lt    = 0x49,
+    SIMD_f64x2_gt    = 0x4a,
+    SIMD_f64x2_le    = 0x4b,
+    SIMD_f64x2_ge    = 0x4c,
+
+    /* v128 operation */
+    SIMD_v128_not    = 0x4d,
+    SIMD_v128_and    = 0x4e,
+    SIMD_v128_andnot = 0x4f,
+    SIMD_v128_or     = 0x50,
+    SIMD_v128_xor    = 0x51,
+    SIMD_v128_bitselect = 0x52,
+
+    /* i8x16 Operation */
+    SIMD_i8x16_abs            = 0x60,
+    SIMD_i8x16_neg            = 0x61,
+    SIMD_i8x16_any_true       = 0x62,
+    SIMD_i8x16_all_true       = 0x63,
+    SIMD_i8x16_bitmask        = 0x64,
+    SIMD_i8x16_narrow_i16x8_s = 0x65,
+    SIMD_i8x16_narrow_i16x8_u = 0x66,
+    SIMD_i8x16_shl            = 0x6b,
+    SIMD_i8x16_shr_s          = 0x6c,
+    SIMD_i8x16_shr_u          = 0x6d,
+    SIMD_i8x16_add            = 0x6e,
+    SIMD_i8x16_add_saturate_s = 0x6f,
+    SIMD_i8x16_add_saturate_u = 0x70,
+    SIMD_i8x16_sub            = 0x71,
+    SIMD_i8x16_sub_saturate_s = 0x72,
+    SIMD_i8x16_sub_saturate_u = 0x73,
+    SIMD_i8x16_min_s          = 0x76,
+    SIMD_i8x16_min_u          = 0x77,
+    SIMD_i8x16_max_s          = 0x78,
+    SIMD_i8x16_max_u          = 0x79,
+    SIMD_i8x16_avgr_u         = 0x7b,
+
+    /* i16x8 operation */
+    SIMD_i16x8_abs            = 0x80,
+    SIMD_i16x8_neg            = 0x81,
+    SIMD_i16x8_any_true       = 0x82,
+    SIMD_i16x8_all_true       = 0x83,
+    SIMD_i16x8_bitmask        = 0x84,
+    SIMD_i16x8_narrow_i32x4_s = 0x85,
+    SIMD_i16x8_narrow_i32x4_u = 0x86,
+    SIMD_i16x8_widen_low_i8x16_s  = 0x87,
+    SIMD_i16x8_widen_high_i8x16_s = 0x88,
+    SIMD_i16x8_widen_low_i8x16_u  = 0x89,
+    SIMD_i16x8_widen_high_i8x16_u = 0x8a,
+    SIMD_i16x8_shl            = 0x8b,
+    SIMD_i16x8_shr_s          = 0x8c,
+    SIMD_i16x8_shr_u          = 0x8d,
+    SIMD_i16x8_add            = 0x8e,
+    SIMD_i16x8_add_saturate_s = 0x8f,
+    SIMD_i16x8_add_saturate_u = 0x90,
+    SIMD_i16x8_sub            = 0x91,
+    SIMD_i16x8_sub_saturate_s = 0x92,
+    SIMD_i16x8_sub_saturate_u = 0x93,
+    SIMD_i16x8_mul            = 0x95,
+    SIMD_i16x8_min_s          = 0x96,
+    SIMD_i16x8_min_u          = 0x97,
+    SIMD_i16x8_max_s          = 0x98,
+    SIMD_i16x8_max_u          = 0x99,
+    SIMD_i16x8_avgr_u         = 0x9b,
+
+    /* i32x4 operation */
+    SIMD_i32x4_abs            = 0xa0,
+    SIMD_i32x4_neg            = 0xa1,
+    SIMD_i32x4_any_true       = 0xa2,
+    SIMD_i32x4_all_true       = 0xa3,
+    SIMD_i32x4_bitmask        = 0xa4,
+    SIMD_i32x4_widen_low_i16x8_s  = 0xa7,
+    SIMD_i32x4_widen_high_i16x8_s = 0xa8,
+    SIMD_i32x4_widen_low_i16x8_u  = 0xa9,
+    SIMD_i32x4_widen_high_i16x8_u = 0xaa,
+    SIMD_i32x4_shl            = 0xab,
+    SIMD_i32x4_shr_s          = 0xac,
+    SIMD_i32x4_shr_u          = 0xad,
+    SIMD_i32x4_add            = 0xae,
+    SIMD_i32x4_sub            = 0xb1,
+    SIMD_i32x4_mul            = 0xb5,
+    SIMD_i32x4_min_s          = 0xb6,
+    SIMD_i32x4_min_u          = 0xb7,
+    SIMD_i32x4_max_s          = 0xb8,
+    SIMD_i32x4_max_u          = 0xb9,
+
+    /* i64x2 operation */
+    SIMD_i64x2_neg    = 0xc1,
+    SIMD_i64x2_shl    = 0xcb,
+    SIMD_i64x2_shr_s  = 0xcc,
+    SIMD_i64x2_shr_u  = 0xcd,
+    SIMD_i64x2_add    = 0xce,
+    SIMD_i64x2_sub    = 0xd1,
+    SIMD_i64x2_mul    = 0xd5,
+
+    /* float ceil/floor/trunc/nearest */
+    SIMD_f32x4_ceil   = 0xd8,
+    SIMD_f32x4_floor  = 0xd9,
+    SIMD_f32x4_trunc  = 0xda,
+    SIMD_f32x4_nearest = 0xdb,
+    SIMD_f64x2_ceil   = 0xdc,
+    SIMD_f64x2_floor  = 0xdd,
+    SIMD_f64x2_trunc  = 0xde,
+    SIMD_f64x2_nearest = 0xdf,
+
+    /* f32x4 operation */
+    SIMD_f32x4_abs    = 0xe0,
+    SIMD_f32x4_neg    = 0xe1,
+    SIMD_f32x4_sqrt   = 0xe3,
+    SIMD_f32x4_add    = 0xe4,
+    SIMD_f32x4_sub    = 0xe5,
+    SIMD_f32x4_mul    = 0xe6,
+    SIMD_f32x4_div    = 0xe7,
+    SIMD_f32x4_min    = 0xe8,
+    SIMD_f32x4_max    = 0xe9,
+
+    /* f64x2 operation */
+    SIMD_f64x2_abs    = 0xec,
+    SIMD_f64x2_neg    = 0xed,
+    SIMD_f64x2_sqrt   = 0xef,
+    SIMD_f64x2_add    = 0xf0,
+    SIMD_f64x2_sub    = 0xf1,
+    SIMD_f64x2_mul    = 0xf2,
+    SIMD_f64x2_div    = 0xf3,
+    SIMD_f64x2_min    = 0xf4,
+    SIMD_f64x2_max    = 0xf5,
+
+    /* conversion operation */
+    SIMD_i32x4_trunc_sat_f32x4_s = 0xf8,
+    SIMD_i32x4_trunc_sat_f32x4_u = 0xf9,
+    SIMD_f32x4_convert_i32x4_s   = 0xfa,
+    SIMD_f32x4_convert_i32x4_u   = 0xfb,
+} WASMSimdEXTOpcode;
+
+typedef enum WASMAtomicEXTOpcode {
+    /* atomic wait and notify */
+    WASM_OP_ATOMIC_NOTIFY               = 0x00,
+    WASM_OP_ATOMIC_WAIT32               = 0x01,
+    WASM_OP_ATOMIC_WAIT64               = 0x02,
+    WASM_OP_ATOMIC_FENCE                = 0x03,
+    /* atomic load and store */
+    WASM_OP_ATOMIC_I32_LOAD             = 0x10,
+    WASM_OP_ATOMIC_I64_LOAD             = 0x11,
+    WASM_OP_ATOMIC_I32_LOAD8_U          = 0x12,
+    WASM_OP_ATOMIC_I32_LOAD16_U         = 0x13,
+    WASM_OP_ATOMIC_I64_LOAD8_U          = 0x14,
+    WASM_OP_ATOMIC_I64_LOAD16_U         = 0x15,
+    WASM_OP_ATOMIC_I64_LOAD32_U         = 0x16,
+    WASM_OP_ATOMIC_I32_STORE            = 0x17,
+    WASM_OP_ATOMIC_I64_STORE            = 0x18,
+    WASM_OP_ATOMIC_I32_STORE8           = 0x19,
+    WASM_OP_ATOMIC_I32_STORE16          = 0x1a,
+    WASM_OP_ATOMIC_I64_STORE8           = 0x1b,
+    WASM_OP_ATOMIC_I64_STORE16          = 0x1c,
+    WASM_OP_ATOMIC_I64_STORE32          = 0x1d,
+    /* atomic add */
+    WASM_OP_ATOMIC_RMW_I32_ADD          = 0x1e,
+    WASM_OP_ATOMIC_RMW_I64_ADD          = 0x1f,
+    WASM_OP_ATOMIC_RMW_I32_ADD8_U       = 0x20,
+    WASM_OP_ATOMIC_RMW_I32_ADD16_U      = 0x21,
+    WASM_OP_ATOMIC_RMW_I64_ADD8_U       = 0x22,
+    WASM_OP_ATOMIC_RMW_I64_ADD16_U      = 0x23,
+    WASM_OP_ATOMIC_RMW_I64_ADD32_U      = 0x24,
+    /* atomic sub */
+    WASM_OP_ATOMIC_RMW_I32_SUB          = 0x25,
+    WASM_OP_ATOMIC_RMW_I64_SUB          = 0x26,
+    WASM_OP_ATOMIC_RMW_I32_SUB8_U       = 0x27,
+    WASM_OP_ATOMIC_RMW_I32_SUB16_U      = 0x28,
+    WASM_OP_ATOMIC_RMW_I64_SUB8_U       = 0x29,
+    WASM_OP_ATOMIC_RMW_I64_SUB16_U      = 0x2a,
+    WASM_OP_ATOMIC_RMW_I64_SUB32_U      = 0x2b,
+    /* atomic and */
+    WASM_OP_ATOMIC_RMW_I32_AND          = 0x2c,
+    WASM_OP_ATOMIC_RMW_I64_AND          = 0x2d,
+    WASM_OP_ATOMIC_RMW_I32_AND8_U       = 0x2e,
+    WASM_OP_ATOMIC_RMW_I32_AND16_U      = 0x2f,
+    WASM_OP_ATOMIC_RMW_I64_AND8_U       = 0x30,
+    WASM_OP_ATOMIC_RMW_I64_AND16_U      = 0x31,
+    WASM_OP_ATOMIC_RMW_I64_AND32_U      = 0x32,
+    /* atomic or */
+    WASM_OP_ATOMIC_RMW_I32_OR           = 0x33,
+    WASM_OP_ATOMIC_RMW_I64_OR           = 0x34,
+    WASM_OP_ATOMIC_RMW_I32_OR8_U        = 0x35,
+    WASM_OP_ATOMIC_RMW_I32_OR16_U       = 0x36,
+    WASM_OP_ATOMIC_RMW_I64_OR8_U        = 0x37,
+    WASM_OP_ATOMIC_RMW_I64_OR16_U       = 0x38,
+    WASM_OP_ATOMIC_RMW_I64_OR32_U       = 0x39,
+    /* atomic xor */
+    WASM_OP_ATOMIC_RMW_I32_XOR          = 0x3a,
+    WASM_OP_ATOMIC_RMW_I64_XOR          = 0x3b,
+    WASM_OP_ATOMIC_RMW_I32_XOR8_U       = 0x3c,
+    WASM_OP_ATOMIC_RMW_I32_XOR16_U      = 0x3d,
+    WASM_OP_ATOMIC_RMW_I64_XOR8_U       = 0x3e,
+    WASM_OP_ATOMIC_RMW_I64_XOR16_U      = 0x3f,
+    WASM_OP_ATOMIC_RMW_I64_XOR32_U      = 0x40,
+    /* atomic xchg */
+    WASM_OP_ATOMIC_RMW_I32_XCHG         = 0x41,
+    WASM_OP_ATOMIC_RMW_I64_XCHG         = 0x42,
+    WASM_OP_ATOMIC_RMW_I32_XCHG8_U      = 0x43,
+    WASM_OP_ATOMIC_RMW_I32_XCHG16_U     = 0x44,
+    WASM_OP_ATOMIC_RMW_I64_XCHG8_U      = 0x45,
+    WASM_OP_ATOMIC_RMW_I64_XCHG16_U     = 0x46,
+    WASM_OP_ATOMIC_RMW_I64_XCHG32_U     = 0x47,
+    /* atomic cmpxchg */
+    WASM_OP_ATOMIC_RMW_I32_CMPXCHG      = 0x48,
+    WASM_OP_ATOMIC_RMW_I64_CMPXCHG      = 0x49,
+    WASM_OP_ATOMIC_RMW_I32_CMPXCHG8_U   = 0x4a,
+    WASM_OP_ATOMIC_RMW_I32_CMPXCHG16_U  = 0x4b,
+    WASM_OP_ATOMIC_RMW_I64_CMPXCHG8_U   = 0x4c,
+    WASM_OP_ATOMIC_RMW_I64_CMPXCHG16_U  = 0x4d,
+    WASM_OP_ATOMIC_RMW_I64_CMPXCHG32_U  = 0x4e,
+} WASMAtomicEXTOpcode;
+
 #ifdef __cplusplus
 }
+#endif
+
+/* Opcode prefix controlled by features */
+#if WASM_ENABLE_SHARED_MEMORY != 0
+#define DEF_ATOMIC_PREFIX_HANDLE(_name)                      \
+  _name[WASM_OP_ATOMIC_PREFIX] =                             \
+    HANDLE_OPCODE (WASM_OP_ATOMIC_PREFIX);   /* 0xfe */
+#else
+#define DEF_ATOMIC_PREFIX_HANDLE(_name)
 #endif
 
 /*
@@ -314,8 +628,8 @@ static type _name[WASM_INSTRUCTION_NUM] = {                  \
   HANDLE_OPCODE (WASM_OP_RETURN),        /* 0x0f */          \
   HANDLE_OPCODE (WASM_OP_CALL),          /* 0x10 */          \
   HANDLE_OPCODE (WASM_OP_CALL_INDIRECT), /* 0x11 */          \
-  HANDLE_OPCODE (WASM_OP_UNUSED_0x12),   /* 0x12 */          \
-  HANDLE_OPCODE (WASM_OP_UNUSED_0x13),   /* 0x13 */          \
+  HANDLE_OPCODE (WASM_OP_RETURN_CALL),   /* 0x12 */          \
+  HANDLE_OPCODE (WASM_OP_RETURN_CALL_INDIRECT),   /* 0x13 */ \
   HANDLE_OPCODE (WASM_OP_UNUSED_0x14),   /* 0x14 */          \
   HANDLE_OPCODE (WASM_OP_UNUSED_0x15),   /* 0x15 */          \
   HANDLE_OPCODE (WASM_OP_UNUSED_0x16),   /* 0x16 */          \
@@ -511,5 +825,6 @@ static type _name[WASM_INSTRUCTION_NUM] = {                  \
 do {                                                         \
   _name[WASM_OP_MISC_PREFIX] =                               \
     HANDLE_OPCODE (WASM_OP_MISC_PREFIX);     /* 0xfc */      \
+  DEF_ATOMIC_PREFIX_HANDLE(_name)                            \
 } while (0)
 #endif /* end of _WASM_OPCODE_H */
